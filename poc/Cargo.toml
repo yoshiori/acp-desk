@@ -1,0 +1,9 @@
+[package]
+name = "acp-poc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-client-protocol = "1.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "time"] }
+anyhow = "1"
