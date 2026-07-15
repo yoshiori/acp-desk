@@ -1,0 +1,11 @@
+/target
+**/target
+Cargo.lock.old
+*.swp
+.DS_Store
+.env
+.env.local
+node_modules/
+dist/
+.idea/
+.vscode/
