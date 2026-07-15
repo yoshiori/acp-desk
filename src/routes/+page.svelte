@@ -6,8 +6,12 @@
 
   async function greet(event: Event) {
     event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
+    try {
+      // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+      greetMsg = await invoke("greet", { name });
+    } catch (error) {
+      greetMsg = `Failed to call the backend: ${error}`;
+    }
   }
 </script>
 
