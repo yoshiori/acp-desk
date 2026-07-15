@@ -32,7 +32,7 @@
   <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
 
   <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
+    <input id="greet-input" aria-label="Name" placeholder="Enter a name..." bind:value={name} />
     <button type="submit">Greet</button>
   </form>
   <p>{greetMsg}</p>
