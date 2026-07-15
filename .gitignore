@@ -9,3 +9,7 @@ node_modules/
 dist/
 .idea/
 .vscode/
+/build
+/.svelte-kit
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
