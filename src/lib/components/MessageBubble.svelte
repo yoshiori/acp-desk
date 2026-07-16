@@ -14,7 +14,8 @@
    * in the webview would replace the chat UI with the target page. The
    * decision uses the raw href attribute (see linkAction). */
   function onLinkClick(event: MouseEvent) {
-    const anchor = (event.target as HTMLElement).closest("a");
+    const target = event.target as HTMLElement | null;
+    const anchor = target?.closest("a");
     if (!anchor) return;
     const href = anchor.getAttribute("href");
     switch (linkAction(href)) {
