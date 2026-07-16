@@ -85,11 +85,15 @@ impl AcpBridge {
         });
     }
 
+    /// Name of the agent whose session is still alive. A dead session
+    /// (agent crashed, loop exited) reports None so callers treat a restart
+    /// of the same agent as a fresh start instead of a no-op.
     pub fn current_agent(&self) -> Option<String> {
         self.session
             .lock()
             .expect("bridge lock poisoned")
             .as_ref()
+            .filter(|handle| !handle.prompt_tx.is_closed())
             .map(|handle| handle.agent_name.clone())
     }
 

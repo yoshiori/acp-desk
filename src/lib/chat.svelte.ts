@@ -20,24 +20,28 @@ export class ChatController {
   #disposed = false;
 
   async init(): Promise<void> {
-    const unlisten = await ipc.onAcpEvent((event) => applyEvent(this.state, event));
-    // dispose() may have run while the listener registration was in flight
-    // (component unmounted before init resolved).
-    if (this.#disposed) {
-      unlisten();
-      return;
-    }
-    this.#unlisten = unlisten;
-    this.agents = await ipc.listAgents();
-    const first = this.agents.find((agent) => agent.available);
-    if (first) {
-      await this.selectAgent(first.name);
-    } else {
-      addSystemMessage(
-        this.state,
-        "No ACP agent found on PATH. Install @agentclientprotocol/claude-agent-acp " +
-          "or @google/gemini-cli and launch acp-desk from a terminal.",
-      );
+    try {
+      const unlisten = await ipc.onAcpEvent((event) => applyEvent(this.state, event));
+      // dispose() may have run while the listener registration was in flight
+      // (component unmounted before init resolved).
+      if (this.#disposed) {
+        unlisten();
+        return;
+      }
+      this.#unlisten = unlisten;
+      this.agents = await ipc.listAgents();
+      const first = this.agents.find((agent) => agent.available);
+      if (first) {
+        await this.selectAgent(first.name);
+      } else {
+        addSystemMessage(
+          this.state,
+          "No ACP agent found on PATH. Install @agentclientprotocol/claude-agent-acp " +
+            "or @google/gemini-cli and launch acp-desk from a terminal.",
+        );
+      }
+    } catch (error) {
+      addSystemMessage(this.state, `Failed to initialize: ${error}`);
     }
   }
 
