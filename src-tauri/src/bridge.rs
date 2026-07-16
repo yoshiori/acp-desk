@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use acp_core::{
-    AgentConfig, PermissionBroker, SessionCommand, Store, TranscriptRecorder, UiEvent,
+    AgentConfig, PermissionBroker, SessionCommand, SessionSetup, Store, TranscriptRecorder,
+    UiEvent,
 };
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use tauri::{AppHandle, Emitter};
@@ -41,13 +42,18 @@ impl AcpBridge {
         }
     }
 
+    /// The transcript database path, for read-only query commands.
+    pub fn db_path(&self) -> &std::path::Path {
+        &self.db_path
+    }
+
     /// Starts a session with the named agent. The replaced session gets a
     /// best-effort Cancel and its command channel dropped: a mid-turn
     /// session cancels the turn, finishes it, and exits its loop, which
     /// (by ACP crate design) kills the child process group. Without the
     /// Cancel, a turn blocked on a permission dialog would never end and
     /// the old child would leak forever.
-    pub fn start(&self, app: AppHandle, config: AgentConfig) {
+    pub fn start(&self, app: AppHandle, config: AgentConfig, cwd: PathBuf, setup: SessionSetup) {
         let (command_tx, command_rx) = unbounded::<SessionCommand>();
         let agent_name = config.name.clone();
         let permissions = Arc::new(PermissionBroker::default());
@@ -75,10 +81,6 @@ impl AcpBridge {
                 }
             };
 
-            let cwd = std::env::current_dir()
-                .or_else(|_| std::env::var("HOME").map(Into::into))
-                .unwrap_or_else(|_| "/".into());
-
             // Persistence must not take the chat down with it: a failed
             // store open just means this session isn't recorded.
             let recorder = Store::open(&db_path)
@@ -94,6 +96,7 @@ impl AcpBridge {
             let result = runtime.block_on(acp_core::run_session(
                 config,
                 cwd,
+                setup,
                 command_rx,
                 session_permissions,
                 // Record before the generation gate: a replaced session's

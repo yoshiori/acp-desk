@@ -199,6 +199,30 @@ impl Store {
         Ok(rows)
     }
 
+    /// Looks up one session (for resume); `None` when the id is unknown.
+    pub fn get_session(&self, id: &str) -> anyhow::Result<Option<SessionRow>> {
+        use rusqlite::OptionalExtension;
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, agent_name, cwd, title, created_at, updated_at
+                 FROM sessions WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(SessionRow {
+                        id: row.get(0)?,
+                        agent_name: row.get(1)?,
+                        cwd: row.get(2)?,
+                        title: row.get(3)?,
+                        created_at: row.get(4)?,
+                        updated_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
     /// A session's transcript in insertion order.
     pub fn load_messages(&self, session_id: &str) -> anyhow::Result<Vec<MessageRow>> {
         let mut statement = self.conn.prepare(
@@ -328,6 +352,19 @@ mod tests {
             .append_message("s1", &text_message("assistant", "hello!"), 110)
             .unwrap();
         assert_eq!(store.list_sessions().unwrap()[0].title, None);
+    }
+
+    #[test]
+    fn gets_a_session_by_id() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .record_session("s1", "Claude Code", "/work/dir", 100)
+            .unwrap();
+
+        let row = store.get_session("s1").unwrap().unwrap();
+        assert_eq!(row.agent_name, "Claude Code");
+        assert_eq!(row.cwd, "/work/dir");
+        assert!(store.get_session("unknown").unwrap().is_none());
     }
 
     #[test]

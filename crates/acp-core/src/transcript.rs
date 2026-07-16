@@ -16,6 +16,10 @@ pub struct TranscriptRecorder {
     agent_name: String,
     cwd: String,
     session_id: Option<String>,
+    /// Sessions register lazily on their first persisted row: merely opening
+    /// the app (or peeking at a resumed session) must not grow the sidebar
+    /// with empty conversations or reorder it.
+    registered: bool,
     turn: Vec<Entry>,
 }
 
@@ -39,6 +43,7 @@ impl TranscriptRecorder {
             agent_name: agent_name.into(),
             cwd: cwd.into(),
             session_id: None,
+            registered: false,
             turn: Vec::new(),
         }
     }
@@ -47,10 +52,6 @@ impl TranscriptRecorder {
         match event {
             UiEvent::SessionReady { session_id } => {
                 self.session_id = Some(session_id.clone());
-                let (agent_name, cwd) = (self.agent_name.clone(), self.cwd.clone());
-                self.with_session(|store, id| {
-                    store.record_session(id, &agent_name, &cwd, unix_now())
-                });
             }
             UiEvent::UserMessage { text } => {
                 // The session loop always ends a turn before accepting the
@@ -182,13 +183,26 @@ impl TranscriptRecorder {
         }
     }
 
-    /// Runs a store operation if the session is known, logging failures.
-    /// Events arriving before SessionReady have nowhere to go and are
-    /// dropped on purpose.
-    fn with_session(&self, op: impl FnOnce(&Store, &str) -> anyhow::Result<()>) {
+    /// Runs a store operation if the session is known, registering the
+    /// session row first (rows reference it) and logging failures. Events
+    /// arriving before SessionReady have nowhere to go and are dropped on
+    /// purpose.
+    fn with_session(&mut self, op: impl FnOnce(&Store, &str) -> anyhow::Result<()>) {
         let Some(session_id) = self.session_id.as_deref() else {
             return;
         };
+        if !self.registered {
+            match self
+                .store
+                .record_session(session_id, &self.agent_name, &self.cwd, unix_now())
+            {
+                Ok(()) => self.registered = true,
+                Err(error) => {
+                    eprintln!("transcript persistence failed: {error:#}");
+                    return;
+                }
+            }
+        }
         if let Err(error) = op(&self.store, session_id) {
             eprintln!("transcript persistence failed: {error:#}");
         }
@@ -343,6 +357,28 @@ mod tests {
         });
         ready(&mut recorder);
         assert_eq!(texts(&recorder), []);
+    }
+
+    #[test]
+    fn a_session_with_no_rows_is_not_registered() {
+        let mut recorder = recorder();
+        ready(&mut recorder);
+        recorder.observe(&UiEvent::TurnEnded {
+            stop_reason: "end_turn".to_string(),
+        });
+        assert_eq!(recorder.store().list_sessions().unwrap(), vec![]);
+    }
+
+    #[test]
+    fn the_first_message_registers_the_session() {
+        let mut recorder = recorder();
+        ready(&mut recorder);
+        recorder.observe(&UiEvent::UserMessage {
+            text: "hi".to_string(),
+        });
+        let sessions = recorder.store().list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].agent_name, "Claude Code");
     }
 
     #[test]

@@ -86,6 +86,56 @@ export function initialState(): ChatState {
   };
 }
 
+/** Mirror of acp-core's MessageRow serde shape (camelCase fields). */
+export interface TranscriptRow {
+  role: string;
+  /** JSON array of content blocks as stored by the backend. */
+  contentJson: string;
+  acpMessageId: string | null;
+  status: string | null;
+}
+
+/**
+ * Rebuilds an idle ChatState from a stored transcript (the resume flow).
+ * The database rows are already chunk-merged, so this is a plain mapping;
+ * usage is left null because only the agent knows the restored context size.
+ */
+export function hydrateFromTranscript(rows: TranscriptRow[]): ChatState {
+  const state = initialState();
+  for (const row of rows) {
+    pushMessage(state, {
+      role: isChatRole(row.role) ? row.role : "system",
+      text: textOfContent(row.contentJson),
+      messageId: row.acpMessageId,
+      status: row.status ?? undefined,
+    });
+  }
+  return state;
+}
+
+function isChatRole(role: string): role is ChatRole {
+  return ["user", "assistant", "thought", "tool", "system"].includes(role);
+}
+
+function textOfContent(contentJson: string): string {
+  try {
+    const blocks: unknown = JSON.parse(contentJson);
+    if (!Array.isArray(blocks)) return "[unreadable message]";
+    return blocks
+      .filter(
+        (block): block is { text: string } =>
+          typeof block === "object" &&
+          block !== null &&
+          "text" in block &&
+          typeof block.text === "string",
+      )
+      .map((block) => block.text)
+      .join("");
+  } catch {
+    return "[unreadable message]";
+  }
+}
+
 export function addUserMessage(state: ChatState, text: string): void {
   pushMessage(state, { role: "user", text, messageId: null });
   state.busy = true;

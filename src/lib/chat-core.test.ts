@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   addUserMessage,
   applyEvent,
+  hydrateFromTranscript,
   initialState,
   settlePermission,
   type AcpEvent,
@@ -192,5 +193,68 @@ describe("permission requests", () => {
     const state = initialState();
     applyAll(state, [permissionRequest(1), { type: "turn_ended", stopReason: "cancelled" }]);
     expect(state.pendingPermissions).toHaveLength(0);
+  });
+});
+
+describe("hydrateFromTranscript", () => {
+  function textJson(text: string): string {
+    return JSON.stringify([{ type: "text", text }]);
+  }
+
+  it("rebuilds messages in order with roles and keys", () => {
+    const state = hydrateFromTranscript([
+      { role: "user", contentJson: textJson("hi"), acpMessageId: null, status: null },
+      { role: "assistant", contentJson: textJson("hello"), acpMessageId: "m1", status: null },
+      { role: "tool", contentJson: textJson("Run ls"), acpMessageId: null, status: "completed" },
+    ]);
+    expect(state.messages.map((m) => [m.role, m.text])).toEqual([
+      ["user", "hi"],
+      ["assistant", "hello"],
+      ["tool", "Run ls"],
+    ]);
+    expect(state.messages[2].status).toBe("completed");
+    expect(new Set(state.messages.map((m) => m.key)).size).toBe(3);
+    expect(state.nextKey).toBe(3);
+  });
+
+  it("starts idle: not busy, not streaming, no pending permissions", () => {
+    const state = hydrateFromTranscript([
+      { role: "user", contentJson: textJson("hi"), acpMessageId: null, status: null },
+    ]);
+    expect(state.busy).toBe(false);
+    expect(state.streaming).toBe(false);
+    expect(state.pendingPermissions).toEqual([]);
+  });
+
+  it("concatenates multiple text blocks and skips non-text blocks", () => {
+    const state = hydrateFromTranscript([
+      {
+        role: "assistant",
+        contentJson: JSON.stringify([
+          { type: "text", text: "a" },
+          { type: "image", data: "..." },
+          { type: "text", text: "b" },
+        ]),
+        acpMessageId: null,
+        status: null,
+      },
+    ]);
+    expect(state.messages[0].text).toBe("ab");
+  });
+
+  it("renders unparseable content as a placeholder instead of crashing", () => {
+    const state = hydrateFromTranscript([
+      { role: "assistant", contentJson: "not json", acpMessageId: null, status: null },
+    ]);
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].text).toBe("[unreadable message]");
+  });
+
+  it("appending after hydration continues from the restored keys", () => {
+    const state = hydrateFromTranscript([
+      { role: "user", contentJson: textJson("hi"), acpMessageId: null, status: null },
+    ]);
+    addUserMessage(state, "again");
+    expect(state.messages.at(-1)?.key).toBe(1);
   });
 });
