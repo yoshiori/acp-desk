@@ -28,6 +28,10 @@ export function respondPermission(requestId: number, optionId: string): Promise<
   return invoke<void>("respond_permission", { requestId, optionId });
 }
 
+export function cancelTurn(): Promise<void> {
+  return invoke<void>("cancel_turn");
+}
+
 /** Event channel name shared with the backend (bridge.rs ACP_EVENT). */
 const ACP_EVENT = "acp:event";
 

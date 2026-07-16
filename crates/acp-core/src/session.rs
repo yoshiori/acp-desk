@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionNotification, TextContent,
+    CancelNotification, ContentBlock, InitializeRequest, McpServer, McpServerStdio,
+    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SessionNotification, TextContent,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
-use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
+use futures::{FutureExt, StreamExt, select};
 use serde::{Deserialize, Serialize};
 
 use crate::events::{UiEvent, map_update};
@@ -38,6 +38,14 @@ impl AgentConfig {
     }
 }
 
+/// Commands the UI feeds into a running session.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionCommand {
+    Prompt(String),
+    /// Cancels the in-flight turn (`session/cancel`); a no-op while idle.
+    Cancel,
+}
+
 /// Runs one agent session until the prompt channel closes or the agent dies.
 ///
 /// Not `Send`: run it on a dedicated thread with a current-thread runtime.
@@ -45,7 +53,7 @@ impl AgentConfig {
 pub async fn run_session(
     config: AgentConfig,
     cwd: PathBuf,
-    mut prompts: UnboundedReceiver<String>,
+    mut commands: UnboundedReceiver<SessionCommand>,
     permissions: Arc<PermissionBroker>,
     on_event: impl Fn(UiEvent) + Clone + Send + Sync + 'static,
 ) -> anyhow::Result<()> {
@@ -93,14 +101,65 @@ pub async fn run_session(
                 session_id: session.session_id.0.to_string(),
             });
 
-            while let Some(text) = prompts.next().await {
-                let response = cx
+            // False once the command channel closes (the session was
+            // replaced): the in-flight turn is cancelled and awaited so the
+            // child exits through the normal turn-end path instead of
+            // leaking, then the loop stops.
+            let mut commands_open = true;
+
+            while commands_open {
+                let text = match commands.next().await {
+                    Some(SessionCommand::Prompt(text)) => text,
+                    // Nothing is in flight while idle.
+                    Some(SessionCommand::Cancel) => continue,
+                    None => break,
+                };
+
+                let turn = cx
                     .send_request(PromptRequest::new(
                         session.session_id.clone(),
                         vec![ContentBlock::Text(TextContent::new(text))],
                     ))
                     .block_task()
-                    .await?;
+                    .fuse();
+                futures::pin_mut!(turn);
+
+                // Keep listening for Cancel while the turn runs. The agent
+                // answers a cancelled turn with stop_reason "cancelled", so
+                // cancellation still flows out through the response below.
+                // One session/cancel per turn is enough: repeated Stop
+                // clicks or a channel close right after a manual cancel
+                // must not spam the agent.
+                let mut cancel_sent = false;
+                let response = loop {
+                    if !commands_open {
+                        break (&mut turn).await;
+                    }
+                    select! {
+                        response = &mut turn => break response,
+                        command = commands.next() => {
+                            match command {
+                                // The UI refuses to send prompts while busy;
+                                // drop any that race through.
+                                Some(SessionCommand::Prompt(_)) => continue,
+                                Some(SessionCommand::Cancel) => {}
+                                None => commands_open = false,
+                            }
+                            if !cancel_sent {
+                                cancel_sent = true;
+                                // Unblock pending permission dialogs first
+                                // or the agent may never get to process the
+                                // cancellation.
+                                turn_permissions.cancel_pending();
+                                cx.send_notification(CancelNotification::new(
+                                    session.session_id.clone(),
+                                ))?;
+                            }
+                        },
+                    }
+                };
+                let response = response?;
+
                 // The turn is over, so nobody waits on unanswered permission
                 // requests anymore; drop them instead of accumulating.
                 turn_permissions.cancel_pending();

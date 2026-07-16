@@ -64,7 +64,11 @@
     {/if}
   </main>
 
-  <Composer busy={chat.state.busy} onsend={(text) => chat.send(text)} />
+  <Composer
+    busy={chat.state.busy}
+    onsend={(text) => chat.send(text)}
+    oncancel={() => chat.cancel()}
+  />
 </div>
 
 <style>
