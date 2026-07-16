@@ -75,6 +75,17 @@ export class ChatController {
     }
   }
 
+  async cancel(): Promise<void> {
+    if (!this.state.busy) return;
+    try {
+      await ipc.cancelTurn();
+      // busy stays true until the agent acknowledges with a turn_ended
+      // (stop_reason "cancelled") — cancellation is asynchronous.
+    } catch (error) {
+      addSystemMessage(this.state, `Failed to cancel: ${error}`);
+    }
+  }
+
   async respondPermission(requestId: number, option: PermissionOption): Promise<void> {
     try {
       await ipc.respondPermission(requestId, option.optionId);

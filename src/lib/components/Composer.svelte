@@ -2,7 +2,8 @@
   let {
     busy,
     onsend,
-  }: { busy: boolean; onsend: (text: string) => void } = $props();
+    oncancel,
+  }: { busy: boolean; onsend: (text: string) => void; oncancel: () => void } = $props();
 
   let draft = $state("");
 
@@ -34,9 +35,11 @@
     bind:value={draft}
     {onkeydown}
   ></textarea>
-  <button type="submit" disabled={busy || !draft.trim()}>
-    {busy ? "…" : "Send"}
-  </button>
+  {#if busy}
+    <button type="button" class="stop" onclick={() => oncancel()}>Stop</button>
+  {:else}
+    <button type="submit" disabled={!draft.trim()}>Send</button>
+  {/if}
 </form>
 
 <style>
@@ -68,5 +71,10 @@
   button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  button.stop {
+    background: transparent;
+    border: 1px solid #dc2626;
+    color: #dc2626;
   }
 </style>

@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use acp_core::{AgentConfig, PermissionBroker, UiEvent};
+use acp_core::{AgentConfig, PermissionBroker, SessionCommand, UiEvent};
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use tauri::{AppHandle, Emitter};
 
@@ -25,16 +25,19 @@ pub struct AcpBridge {
 
 struct SessionHandle {
     agent_name: String,
-    prompt_tx: UnboundedSender<String>,
+    command_tx: UnboundedSender<SessionCommand>,
     permissions: Arc<PermissionBroker>,
 }
 
 impl AcpBridge {
-    /// Starts a session with the named agent. Replacing an existing session
-    /// drops its prompt channel, which ends the session loop and (by ACP
-    /// crate design) kills the child process group.
+    /// Starts a session with the named agent. The replaced session gets a
+    /// best-effort Cancel and its command channel dropped: a mid-turn
+    /// session cancels the turn, finishes it, and exits its loop, which
+    /// (by ACP crate design) kills the child process group. Without the
+    /// Cancel, a turn blocked on a permission dialog would never end and
+    /// the old child would leak forever.
     pub fn start(&self, app: AppHandle, config: AgentConfig) {
-        let (prompt_tx, prompt_rx) = unbounded::<String>();
+        let (command_tx, command_rx) = unbounded::<SessionCommand>();
         let agent_name = config.name.clone();
         let permissions = Arc::new(PermissionBroker::default());
         let session_permissions = Arc::clone(&permissions);
@@ -69,7 +72,7 @@ impl AcpBridge {
             let result = runtime.block_on(acp_core::run_session(
                 config,
                 cwd,
-                prompt_rx,
+                command_rx,
                 session_permissions,
                 move |event| event_emit(&event_app, &event),
             ));
@@ -83,11 +86,16 @@ impl AcpBridge {
             }
         });
 
-        *self.session.lock().expect("bridge lock poisoned") = Some(SessionHandle {
-            agent_name,
-            prompt_tx,
-            permissions,
-        });
+        let replaced = self.session.lock().expect("bridge lock poisoned").replace(
+            SessionHandle {
+                agent_name,
+                command_tx,
+                permissions,
+            },
+        );
+        if let Some(old) = replaced {
+            let _ = old.command_tx.unbounded_send(SessionCommand::Cancel);
+        }
     }
 
     /// Name of the agent whose session is still alive. A dead session
@@ -98,7 +106,7 @@ impl AcpBridge {
             .lock()
             .expect("bridge lock poisoned")
             .as_ref()
-            .filter(|handle| !handle.prompt_tx.is_closed())
+            .filter(|handle| !handle.command_tx.is_closed())
             .map(|handle| handle.agent_name.clone())
     }
 
@@ -108,9 +116,20 @@ impl AcpBridge {
             .as_ref()
             .ok_or_else(|| "no active session; start an agent first".to_string())?;
         handle
-            .prompt_tx
-            .unbounded_send(text)
+            .command_tx
+            .unbounded_send(SessionCommand::Prompt(text))
             .map_err(|_| "agent session has ended; restart the agent".to_string())
+    }
+
+    /// Cancels the in-flight turn. A session that already ended has nothing
+    /// to cancel, so a closed channel is success, not an error.
+    pub fn cancel_turn(&self) -> Result<(), String> {
+        let guard = self.session.lock().expect("bridge lock poisoned");
+        let handle = guard
+            .as_ref()
+            .ok_or_else(|| "no active session; start an agent first".to_string())?;
+        let _ = handle.command_tx.unbounded_send(SessionCommand::Cancel);
+        Ok(())
     }
 
     /// Forwards the user's permission decision to the current session's

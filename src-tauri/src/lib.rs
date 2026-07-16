@@ -36,6 +36,11 @@ fn send_prompt(bridge: State<'_, AcpBridge>, text: String) -> Result<(), String>
 }
 
 #[tauri::command]
+fn cancel_turn(bridge: State<'_, AcpBridge>) -> Result<(), String> {
+    bridge.cancel_turn()
+}
+
+#[tauri::command]
 fn respond_permission(
     bridge: State<'_, AcpBridge>,
     request_id: u64,
@@ -53,6 +58,7 @@ pub fn run() {
             list_agents,
             start_session,
             send_prompt,
+            cancel_turn,
             respond_permission
         ])
         .run(tauri::generate_context!())

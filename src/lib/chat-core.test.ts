@@ -112,6 +112,22 @@ describe("turn lifecycle", () => {
     expect(state.messages.at(-1)?.text).toContain("child crashed");
   });
 
+  it("a cancelled turn surfaces a system message", () => {
+    const state = initialState();
+    addUserMessage(state, "hi");
+    applyEvent(state, { type: "turn_ended", stopReason: "cancelled" });
+    expect(state.busy).toBe(false);
+    expect(state.messages.at(-1)?.role).toBe("system");
+    expect(state.messages.at(-1)?.text).toContain("cancelled");
+  });
+
+  it("a normally ended turn adds no system message", () => {
+    const state = initialState();
+    addUserMessage(state, "hi");
+    applyEvent(state, { type: "turn_ended", stopReason: "end_turn" });
+    expect(state.messages.at(-1)?.role).toBe("user");
+  });
+
   it("session_ready records the session id", () => {
     const state = initialState();
     applyEvent(state, { type: "session_ready", sessionId: "s1" });

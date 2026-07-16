@@ -154,6 +154,9 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
       state.busy = false;
       state.streaming = false;
       state.pendingPermissions = [];
+      if (event.stopReason === "cancelled") {
+        addSystemMessage(state, "Turn cancelled.");
+      }
       break;
     case "agent_error":
       state.busy = false;

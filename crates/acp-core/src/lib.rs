@@ -7,4 +7,4 @@ mod session;
 
 pub use events::{CommandInfo, PermissionOptionInfo, UiEvent, map_update};
 pub use permission::PermissionBroker;
-pub use session::{AgentConfig, run_session};
+pub use session::{AgentConfig, SessionCommand, run_session};
