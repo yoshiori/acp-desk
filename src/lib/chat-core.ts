@@ -16,12 +16,30 @@ export type AcpEvent =
       costAmount: number | null;
       costCurrency: string | null;
     }
-  | { type: "permission_decided"; toolTitle: string; decision: string }
+  | {
+      type: "permission_requested";
+      requestId: number;
+      toolTitle: string;
+      options: PermissionOption[];
+    }
   | { type: "session_ready"; sessionId: string }
   | { type: "turn_ended"; stopReason: string }
   | { type: "agent_error"; message: string };
 
 export type ChatRole = "user" | "assistant" | "thought" | "tool" | "system";
+
+/** `kind` is the ACP wire name (allow_once, reject_always, …) for styling. */
+export interface PermissionOption {
+  optionId: string;
+  name: string;
+  kind: string;
+}
+
+export interface PermissionRequest {
+  requestId: number;
+  toolTitle: string;
+  options: PermissionOption[];
+}
 
 export interface ChatMessage {
   key: number;
@@ -50,6 +68,8 @@ export interface ChatState {
   usage: Usage | null;
   /** Whether an anonymous streaming message may still receive chunks. */
   streaming: boolean;
+  /** Tool-call permission requests awaiting the user's decision. */
+  pendingPermissions: PermissionRequest[];
   nextKey: number;
 }
 
@@ -60,6 +80,7 @@ export function initialState(): ChatState {
     busy: false,
     usage: null,
     streaming: false,
+    pendingPermissions: [],
     nextKey: 0,
   };
 }
@@ -116,28 +137,49 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
         costCurrency: event.costCurrency ?? state.usage?.costCurrency ?? null,
       };
       break;
-    case "permission_decided":
-      addSystemMessage(
-        state,
-        `Tool call "${event.toolTitle}" was auto-rejected (${event.decision}). ` +
-          "The permission dialog arrives in v0.2.",
-      );
+    case "permission_requested":
+      state.pendingPermissions.push({
+        requestId: event.requestId,
+        toolTitle: event.toolTitle,
+        options: event.options,
+      });
       break;
     case "session_ready":
       state.sessionId = event.sessionId;
       break;
+    // Both turn_ended and agent_error mean the backend no longer waits for
+    // an answer (the pending oneshot was consumed or dropped), so lingering
+    // cards would only produce "unknown request" errors when clicked.
     case "turn_ended":
       state.busy = false;
       state.streaming = false;
+      state.pendingPermissions = [];
       break;
     case "agent_error":
       state.busy = false;
+      state.pendingPermissions = [];
       addSystemMessage(state, `Agent error: ${event.message}`);
       break;
     case "available_commands":
       // v0.1 has no slash-command UI; slash input is forwarded as plain text.
       break;
   }
+}
+
+/**
+ * Records a decided permission request: removes it from the pending queue
+ * and leaves a system message with the outcome. Called after the backend
+ * accepted the answer, so an unknown id (stale card) is a no-op.
+ */
+export function settlePermission(
+  state: ChatState,
+  requestId: number,
+  decision: string,
+): void {
+  const index = state.pendingPermissions.findIndex((p) => p.requestId === requestId);
+  if (index === -1) return;
+  const [request] = state.pendingPermissions.splice(index, 1);
+  addSystemMessage(state, `Tool call "${request.toolTitle}": ${decision}`);
 }
 
 function pushMessage(state: ChatState, message: Omit<ChatMessage, "key">): ChatMessage {

@@ -7,7 +7,9 @@ import {
   addUserMessage,
   applyEvent,
   initialState,
+  settlePermission,
   type ChatState,
+  type PermissionOption,
 } from "./chat-core";
 import * as ipc from "./ipc";
 
@@ -47,10 +49,15 @@ export class ChatController {
 
   async selectAgent(name: string): Promise<void> {
     try {
-      await ipc.startSession(name);
+      const started = await ipc.startSession(name);
       this.selectedAgent = name;
-      this.state = initialState();
-      addSystemMessage(this.state, `Starting ${name}…`);
+      // Only a fresh session gets a fresh chat. If the agent was already
+      // running, the backend may hold open permission requests; wiping the
+      // state here would drop their cards and leave the turn blocked.
+      if (started) {
+        this.state = initialState();
+        addSystemMessage(this.state, `Starting ${name}…`);
+      }
     } catch (error) {
       addSystemMessage(this.state, `Failed to start ${name}: ${error}`);
     }
@@ -65,6 +72,17 @@ export class ChatController {
     } catch (error) {
       this.state.busy = false;
       addSystemMessage(this.state, `Failed to send: ${error}`);
+    }
+  }
+
+  async respondPermission(requestId: number, option: PermissionOption): Promise<void> {
+    try {
+      await ipc.respondPermission(requestId, option.optionId);
+      settlePermission(this.state, requestId, option.name);
+    } catch (error) {
+      // Settle on failure too: the backend no longer accepts an answer for
+      // this request, so leaving the card would keep a dead, disabled UI.
+      settlePermission(this.state, requestId, `failed (${error})`);
     }
   }
 

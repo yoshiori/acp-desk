@@ -251,19 +251,21 @@ resource-link, etc.); we don't want to migrate the schema every time.
 
 - [x] PoC: Rust CLI, spawn `claude-agent-acp`, one prompt → streamed reply.
       **Done** (`poc/`).
-- [ ] Tauri v2 scaffold with Svelte 5.
-- [ ] Rust backend port of the PoC: `#[tauri::command] send_prompt`.
-- [ ] Frontend: chat view rendering `AgentMessageChunk` merged by
-      `message_id`, composer, streaming.
-- [ ] Agent selector reading a hard-coded list of two entries
+- [x] Tauri v2 scaffold with Svelte 5. **Done** (PR #1).
+- [x] Rust backend port of the PoC: `#[tauri::command] send_prompt`.
+      **Done** (PR #2).
+- [x] Frontend: chat view rendering `AgentMessageChunk` merged by
+      `message_id`, composer, streaming. **Done** (PR #2).
+- [x] Agent selector reading a hard-coded list of two entries
       (Claude via `claude-agent-acp`, Gemini via `gemini --acp`).
-- [ ] No persistence, no history — restart-clean.
+      **Done** (PR #2).
+- [x] No persistence, no history — restart-clean. **Done** (PR #2).
 
 ### v0.2 — "It remembers" (evenings)
 
 - [ ] SQLite schema + migrations (`refinery` or hand-rolled).
 - [ ] Session list sidebar, resumable sessions.
-- [ ] Permission dialog wired to `on_receive_request` — real user approve/deny
+- [x] Permission dialog wired to `on_receive_request` — real user approve/deny
       for tool calls.
 - [ ] Tool call view: render `ToolCallStart` / `ToolCallUpdate` / `ToolCallEnd`
       with a collapsible details block.

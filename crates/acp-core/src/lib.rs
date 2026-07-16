@@ -2,7 +2,9 @@
 //! protocol handling stays unit-testable without webkit system libraries.
 
 mod events;
+mod permission;
 mod session;
 
-pub use events::{CommandInfo, UiEvent, decide_permission, map_update};
+pub use events::{CommandInfo, PermissionOptionInfo, UiEvent, map_update};
+pub use permission::PermissionBroker;
 pub use session::{AgentConfig, run_session};

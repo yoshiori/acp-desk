@@ -4,10 +4,7 @@
 //! what gets serialized into Tauri events, so its serde shape is part of the
 //! frontend API and covered by tests.
 
-use agent_client_protocol::schema::v1::{
-    ContentBlock, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
-    SelectedPermissionOutcome, SessionUpdate,
-};
+use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -41,12 +38,13 @@ pub enum UiEvent {
         cost_amount: Option<f64>,
         cost_currency: Option<String>,
     },
-    /// Emitted when the backend auto-answers a permission request.
-    /// v0.1 has no permission dialog, so every request is rejected and the
-    /// user is told about it; the real dialog arrives in v0.2.
-    PermissionDecided {
+    /// Asks the user to decide a tool-call permission request. The agent's
+    /// turn stays blocked until the UI answers through `respond_permission`
+    /// (or the session ends, which cancels the request).
+    PermissionRequested {
+        request_id: u64,
         tool_title: String,
-        decision: String,
+        options: Vec<PermissionOptionInfo>,
     },
     SessionReady {
         session_id: String,
@@ -64,6 +62,16 @@ pub enum UiEvent {
 pub struct CommandInfo {
     pub name: String,
     pub description: String,
+}
+
+/// One choice of a permission request; `kind` carries the schema's wire name
+/// (`allow_once`, `reject_always`, …) so the UI can style allow/reject apart.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionOptionInfo {
+    pub option_id: String,
+    pub name: String,
+    pub kind: String,
 }
 
 /// Maps one ACP session update to at most one UI event.
@@ -114,44 +122,6 @@ pub fn map_update(update: SessionUpdate) -> Option<UiEvent> {
     }
 }
 
-/// Decides how to answer a permission request without a dialog (v0.1).
-///
-/// Rejects once if the agent offers that option, otherwise cancels the
-/// request. Returns the outcome to send plus the event telling the user
-/// what happened.
-pub fn decide_permission(request: &RequestPermissionRequest) -> (RequestPermissionOutcome, UiEvent) {
-    let tool_title = request
-        .tool_call
-        .fields
-        .title
-        .clone()
-        .unwrap_or_else(|| request.tool_call.tool_call_id.0.to_string());
-
-    let reject_once = request
-        .options
-        .iter()
-        .find(|o| o.kind == PermissionOptionKind::RejectOnce);
-
-    match reject_once {
-        Some(option) => (
-            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                option.option_id.clone(),
-            )),
-            UiEvent::PermissionDecided {
-                tool_title,
-                decision: option.name.clone(),
-            },
-        ),
-        None => (
-            RequestPermissionOutcome::Cancelled,
-            UiEvent::PermissionDecided {
-                tool_title,
-                decision: "cancelled".to_string(),
-            },
-        ),
-    }
-}
-
 fn text_of(content: &ContentBlock) -> String {
     match content {
         ContentBlock::Text(text) => text.text.clone(),
@@ -161,7 +131,7 @@ fn text_of(content: &ContentBlock) -> String {
 
 /// Snake_case wire name of a serde enum variant (e.g. `ToolCallStatus::InProgress`
 /// → `"in_progress"`), reusing the schema crate's own serialization.
-fn enum_str<T: Serialize>(value: &T) -> String {
+pub(crate) fn enum_str<T: Serialize>(value: &T) -> String {
     match serde_json::to_value(value) {
         Ok(serde_json::Value::String(s)) => s,
         // Content blocks and friends serialize to objects with a "type" tag.
@@ -178,9 +148,8 @@ fn enum_str<T: Serialize>(value: &T) -> String {
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{
-        AvailableCommand, AvailableCommandsUpdate, ContentChunk, Cost, MessageId,
-        PermissionOption, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
-        ToolCallUpdateFields, UsageUpdate,
+        AvailableCommand, AvailableCommandsUpdate, ContentChunk, Cost, MessageId, TextContent,
+        ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
     };
 
     fn text_chunk(text: &str, message_id: Option<&str>) -> ContentChunk {
@@ -294,44 +263,22 @@ mod tests {
     }
 
     #[test]
-    fn permission_request_prefers_reject_once() {
-        let request = RequestPermissionRequest::new(
-            "s1",
-            ToolCallUpdate::new("tc1", ToolCallUpdateFields::default()),
-            vec![
-                PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
-                PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
-            ],
-        );
-
-        let (outcome, event) = decide_permission(&request);
-        assert!(matches!(
-            outcome,
-            RequestPermissionOutcome::Selected(ref selected)
-                if selected.option_id.0.as_ref() == "reject"
-        ));
-        assert_eq!(
-            event,
-            UiEvent::PermissionDecided {
-                tool_title: "tc1".to_string(),
-                decision: "Reject".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn permission_request_without_reject_option_cancels() {
-        let request = RequestPermissionRequest::new(
-            "s1",
-            ToolCallUpdate::new("tc1", ToolCallUpdateFields::default()),
-            vec![],
-        );
-        let (outcome, event) = decide_permission(&request);
-        assert!(matches!(outcome, RequestPermissionOutcome::Cancelled));
-        assert!(matches!(
-            event,
-            UiEvent::PermissionDecided { decision, .. } if decision == "cancelled"
-        ));
+    fn permission_requested_serializes_with_camel_case_options() {
+        let event = UiEvent::PermissionRequested {
+            request_id: 7,
+            tool_title: "Run ls".to_string(),
+            options: vec![PermissionOptionInfo {
+                option_id: "allow".to_string(),
+                name: "Allow".to_string(),
+                kind: "allow_once".to_string(),
+            }],
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "permission_requested");
+        assert_eq!(json["requestId"], 7);
+        assert_eq!(json["toolTitle"], "Run ls");
+        assert_eq!(json["options"][0]["optionId"], "allow");
+        assert_eq!(json["options"][0]["kind"], "allow_once");
     }
 
     #[test]

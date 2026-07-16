@@ -4,6 +4,7 @@ import {
   addUserMessage,
   applyEvent,
   initialState,
+  settlePermission,
   type AcpEvent,
   type ChatState,
 } from "./chat-core";
@@ -117,10 +118,56 @@ describe("turn lifecycle", () => {
     expect(state.sessionId).toBe("s1");
   });
 
-  it("permission_decided surfaces an explanatory system message", () => {
+});
+
+function permissionRequest(requestId: number, toolTitle = "Run ls"): AcpEvent {
+  return {
+    type: "permission_requested",
+    requestId,
+    toolTitle,
+    options: [
+      { optionId: "allow", name: "Allow", kind: "allow_once" },
+      { optionId: "reject", name: "Reject", kind: "reject_once" },
+    ],
+  };
+}
+
+describe("permission requests", () => {
+  it("queues incoming requests in arrival order", () => {
     const state = initialState();
-    applyEvent(state, { type: "permission_decided", toolTitle: "Edit file", decision: "Reject" });
-    expect(state.messages[0].role).toBe("system");
-    expect(state.messages[0].text).toContain("Edit file");
+    applyAll(state, [permissionRequest(1, "Run ls"), permissionRequest(2, "Edit file")]);
+    expect(state.pendingPermissions.map((p) => p.requestId)).toEqual([1, 2]);
+    expect(state.pendingPermissions[0].toolTitle).toBe("Run ls");
+    expect(state.pendingPermissions[0].options[0].optionId).toBe("allow");
+  });
+
+  it("settling removes the request and records the decision as a system message", () => {
+    const state = initialState();
+    applyEvent(state, permissionRequest(1, "Run ls"));
+    settlePermission(state, 1, "Allow");
+    expect(state.pendingPermissions).toHaveLength(0);
+    expect(state.messages.at(-1)?.role).toBe("system");
+    expect(state.messages.at(-1)?.text).toContain("Run ls");
+    expect(state.messages.at(-1)?.text).toContain("Allow");
+  });
+
+  it("settling an unknown request changes nothing", () => {
+    const state = initialState();
+    applyEvent(state, permissionRequest(1));
+    settlePermission(state, 99, "Allow");
+    expect(state.pendingPermissions).toHaveLength(1);
+    expect(state.messages).toHaveLength(0);
+  });
+
+  it("agent_error clears pending requests", () => {
+    const state = initialState();
+    applyAll(state, [permissionRequest(1), { type: "agent_error", message: "child crashed" }]);
+    expect(state.pendingPermissions).toHaveLength(0);
+  });
+
+  it("turn_ended clears pending requests", () => {
+    const state = initialState();
+    applyAll(state, [permissionRequest(1), { type: "turn_ended", stopReason: "cancelled" }]);
+    expect(state.pendingPermissions).toHaveLength(0);
   });
 });
