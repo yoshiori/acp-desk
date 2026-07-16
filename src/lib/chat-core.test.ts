@@ -128,6 +128,13 @@ describe("turn lifecycle", () => {
     expect(state.messages.at(-1)?.role).toBe("user");
   });
 
+  it("user_message echo adds nothing (the UI already shows its own copy)", () => {
+    const state = initialState();
+    addUserMessage(state, "hi");
+    applyEvent(state, { type: "user_message", text: "hi" });
+    expect(state.messages).toHaveLength(1);
+  });
+
   it("session_ready records the session id", () => {
     const state = initialState();
     applyEvent(state, { type: "session_ready", sessionId: "s1" });

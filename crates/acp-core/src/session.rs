@@ -114,6 +114,7 @@ pub async fn run_session(
                     Some(SessionCommand::Cancel) => continue,
                     None => break,
                 };
+                on_event(UiEvent::UserMessage { text: text.clone() });
 
                 let turn = cx
                     .send_request(PromptRequest::new(

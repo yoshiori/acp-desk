@@ -2,7 +2,7 @@ mod agents;
 mod bridge;
 
 use bridge::AcpBridge;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 fn list_agents() -> Vec<agents::AgentListing> {
@@ -53,7 +53,14 @@ fn respond_permission(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AcpBridge::default())
+        .setup(|app| {
+            let db_path = app.path().app_data_dir()?.join("acp-desk.db");
+            if let Some(dir) = db_path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            app.manage(AcpBridge::new(db_path));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_agents,
             start_session,

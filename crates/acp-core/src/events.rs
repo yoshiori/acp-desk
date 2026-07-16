@@ -49,6 +49,12 @@ pub enum UiEvent {
     SessionReady {
         session_id: String,
     },
+    /// Echo of a prompt the session actually accepted. The frontend shows
+    /// its own copy immediately and ignores this; the transcript recorder
+    /// persists this one, so dropped prompts never enter history.
+    UserMessage {
+        text: String,
+    },
     TurnEnded {
         stop_reason: String,
     },
