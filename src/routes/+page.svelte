@@ -4,6 +4,7 @@
   import { ChatController } from "$lib/chat.svelte";
   import Composer from "$lib/components/Composer.svelte";
   import MessageBubble from "$lib/components/MessageBubble.svelte";
+  import PermissionCard from "$lib/components/PermissionCard.svelte";
 
   const chat = new ChatController();
 
@@ -17,6 +18,7 @@
   $effect(() => {
     void chat.state.messages.length;
     void chat.state.messages.at(-1)?.text;
+    void chat.state.pendingPermissions.length;
     log?.scrollTo({ top: log.scrollHeight });
   });
 
@@ -51,7 +53,13 @@
     {#each chat.state.messages as message (message.key)}
       <MessageBubble {message} />
     {/each}
-    {#if chat.state.busy}
+    {#each chat.state.pendingPermissions as request (request.requestId)}
+      <PermissionCard
+        {request}
+        onrespond={(requestId, option) => chat.respondPermission(requestId, option)}
+      />
+    {/each}
+    {#if chat.state.busy && chat.state.pendingPermissions.length === 0}
       <div class="typing">…</div>
     {/if}
   </main>

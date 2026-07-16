@@ -3,18 +3,21 @@
 //! so the caller must treat the running future as owning the agent.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     ContentBlock, InitializeRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest,
-    RequestPermissionRequest, RequestPermissionResponse, SessionNotification, TextContent,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SessionNotification, TextContent,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use serde::{Deserialize, Serialize};
 
-use crate::events::{UiEvent, decide_permission, map_update};
+use crate::events::{UiEvent, map_update};
+use crate::permission::PermissionBroker;
 
 /// A launchable agent. `command` must be an absolute path: the app may not
 /// inherit the shell's PATH (Tauri launched from a desktop entry, cargo run,
@@ -43,6 +46,7 @@ pub async fn run_session(
     config: AgentConfig,
     cwd: PathBuf,
     mut prompts: UnboundedReceiver<String>,
+    permissions: Arc<PermissionBroker>,
     on_event: impl Fn(UiEvent) + Clone + Send + Sync + 'static,
 ) -> anyhow::Result<()> {
     let agent = config.to_agent();
@@ -61,10 +65,18 @@ pub async fn run_session(
             agent_client_protocol::on_receive_notification!(),
         )
         .on_receive_request(
-            async move |request: RequestPermissionRequest, responder, _cx| {
-                let (outcome, event) = decide_permission(&request);
+            async move |request: RequestPermissionRequest, responder, cx| {
+                let (event, answer) = permissions.begin(&request);
                 permission_events(event);
-                responder.respond(RequestPermissionResponse::new(outcome))
+                // The user may take arbitrarily long to answer, and handlers
+                // block the connection's event loop; await the decision in a
+                // spawned task so notifications keep streaming meanwhile.
+                cx.spawn(async move {
+                    let outcome = answer
+                        .await
+                        .unwrap_or(RequestPermissionOutcome::Cancelled);
+                    responder.respond(RequestPermissionResponse::new(outcome))
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )

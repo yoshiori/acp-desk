@@ -14,12 +14,18 @@ export function listAgents(): Promise<AgentListing[]> {
   return invoke<AgentListing[]>("list_agents");
 }
 
-export function startSession(agentName: string): Promise<void> {
-  return invoke<void>("start_session", { agentName });
+/** Resolves to true when a fresh session was started, false when the
+ * agent's existing session is still alive and was left untouched. */
+export function startSession(agentName: string): Promise<boolean> {
+  return invoke<boolean>("start_session", { agentName });
 }
 
 export function sendPrompt(text: string): Promise<void> {
   return invoke<void>("send_prompt", { text });
+}
+
+export function respondPermission(requestId: number, optionId: string): Promise<void> {
+  return invoke<void>("respond_permission", { requestId, optionId });
 }
 
 /** Event channel name shared with the backend (bridge.rs ACP_EVENT). */

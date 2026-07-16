@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use acp_core::{AgentConfig, UiEvent};
+use acp_core::{AgentConfig, PermissionBroker, UiEvent};
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use tauri::{AppHandle, Emitter};
 
@@ -26,6 +26,7 @@ pub struct AcpBridge {
 struct SessionHandle {
     agent_name: String,
     prompt_tx: UnboundedSender<String>,
+    permissions: Arc<PermissionBroker>,
 }
 
 impl AcpBridge {
@@ -35,6 +36,8 @@ impl AcpBridge {
     pub fn start(&self, app: AppHandle, config: AgentConfig) {
         let (prompt_tx, prompt_rx) = unbounded::<String>();
         let agent_name = config.name.clone();
+        let permissions = Arc::new(PermissionBroker::default());
+        let session_permissions = Arc::clone(&permissions);
         let my_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let current_generation = Arc::clone(&self.generation);
 
@@ -67,6 +70,7 @@ impl AcpBridge {
                 config,
                 cwd,
                 prompt_rx,
+                session_permissions,
                 move |event| event_emit(&event_app, &event),
             ));
 
@@ -82,6 +86,7 @@ impl AcpBridge {
         *self.session.lock().expect("bridge lock poisoned") = Some(SessionHandle {
             agent_name,
             prompt_tx,
+            permissions,
         });
     }
 
@@ -106,6 +111,17 @@ impl AcpBridge {
             .prompt_tx
             .unbounded_send(text)
             .map_err(|_| "agent session has ended; restart the agent".to_string())
+    }
+
+    /// Forwards the user's permission decision to the current session's
+    /// broker. A replaced session took its broker with it, so answers to a
+    /// stale dialog fail with "unknown request" instead of leaking across.
+    pub fn respond_permission(&self, request_id: u64, option_id: &str) -> Result<(), String> {
+        let guard = self.session.lock().expect("bridge lock poisoned");
+        let handle = guard
+            .as_ref()
+            .ok_or_else(|| "no active session; start an agent first".to_string())?;
+        handle.permissions.resolve(request_id, option_id)
     }
 }
 
