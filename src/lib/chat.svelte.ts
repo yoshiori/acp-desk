@@ -17,9 +17,17 @@ export class ChatController {
   selectedAgent = $state<string | null>(null);
 
   #unlisten: UnlistenFn | null = null;
+  #disposed = false;
 
   async init(): Promise<void> {
-    this.#unlisten = await ipc.onAcpEvent((event) => applyEvent(this.state, event));
+    const unlisten = await ipc.onAcpEvent((event) => applyEvent(this.state, event));
+    // dispose() may have run while the listener registration was in flight
+    // (component unmounted before init resolved).
+    if (this.#disposed) {
+      unlisten();
+      return;
+    }
+    this.#unlisten = unlisten;
     this.agents = await ipc.listAgents();
     const first = this.agents.find((agent) => agent.available);
     if (first) {
@@ -57,6 +65,7 @@ export class ChatController {
   }
 
   dispose(): void {
+    this.#disposed = true;
     this.#unlisten?.();
     this.#unlisten = null;
   }

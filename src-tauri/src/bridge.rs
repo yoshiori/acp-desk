@@ -4,7 +4,8 @@
 //! current-thread tokio runtime; prompts go in through a channel, events
 //! come back via `app.emit`.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use acp_core::{AgentConfig, UiEvent};
 use futures::channel::mpsc::{UnboundedSender, unbounded};
@@ -16,6 +17,10 @@ pub const ACP_EVENT: &str = "acp:event";
 #[derive(Default)]
 pub struct AcpBridge {
     session: Mutex<Option<SessionHandle>>,
+    /// Bumped on every start(); a session thread only emits while it is the
+    /// newest generation, so a replaced session finishing its last turn
+    /// cannot leak events into the next session's UI state.
+    generation: Arc<AtomicU64>,
 }
 
 struct SessionHandle {
@@ -30,8 +35,15 @@ impl AcpBridge {
     pub fn start(&self, app: AppHandle, config: AgentConfig) {
         let (prompt_tx, prompt_rx) = unbounded::<String>();
         let agent_name = config.name.clone();
+        let my_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let current_generation = Arc::clone(&self.generation);
 
         std::thread::spawn(move || {
+            let emit = move |app: &AppHandle, event: &UiEvent| {
+                if current_generation.load(Ordering::SeqCst) == my_generation {
+                    emit_event(app, event);
+                }
+            };
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -50,11 +62,12 @@ impl AcpBridge {
                 .unwrap_or_else(|_| "/".into());
 
             let event_app = app.clone();
+            let event_emit = emit.clone();
             let result = runtime.block_on(acp_core::run_session(
                 config,
                 cwd,
                 prompt_rx,
-                move |event| emit(&event_app, &event),
+                move |event| event_emit(&event_app, &event),
             ));
 
             if let Err(error) = result {
@@ -92,7 +105,7 @@ impl AcpBridge {
     }
 }
 
-fn emit(app: &AppHandle, event: &UiEvent) {
+fn emit_event(app: &AppHandle, event: &UiEvent) {
     if let Err(error) = app.emit(ACP_EVENT, event) {
         eprintln!("failed to emit {ACP_EVENT}: {error}");
     }
