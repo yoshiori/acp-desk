@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { renderMarkdown } from "./markdown";
+import { linkAction, renderMarkdown } from "./markdown";
 
 describe("renderMarkdown", () => {
   it("renders paragraphs and emphasis", () => {
@@ -49,5 +49,32 @@ describe("renderMarkdown", () => {
     const html = renderMarkdown("- first\n- second");
     expect(html).toContain("<ul>");
     expect(html).toContain("<li>first</li>");
+  });
+});
+
+describe("linkAction", () => {
+  it("sends absolute http(s) links to the system browser", () => {
+    expect(linkAction("https://example.com/a")).toBe("external");
+    expect(linkAction("http://example.com")).toBe("external");
+    expect(linkAction("HTTPS://EXAMPLE.COM")).toBe("external");
+  });
+
+  it("lets pure hash links scroll in place", () => {
+    expect(linkAction("#section")).toBe("internal");
+  });
+
+  it("blocks relative links so the webview cannot navigate away", () => {
+    expect(linkAction("./notes.md")).toBe("blocked");
+    expect(linkAction("/absolute/path")).toBe("blocked");
+    expect(linkAction("page.html")).toBe("blocked");
+  });
+
+  it("blocks other schemes", () => {
+    expect(linkAction("mailto:a@example.com")).toBe("blocked");
+    expect(linkAction("file:///etc/passwd")).toBe("blocked");
+  });
+
+  it("treats a missing href as internal (not a link)", () => {
+    expect(linkAction(null)).toBe("internal");
   });
 });

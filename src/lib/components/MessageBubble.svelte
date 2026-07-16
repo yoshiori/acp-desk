@@ -2,7 +2,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
 
   import type { ChatMessage } from "$lib/chat-core";
-  import { renderMarkdown } from "$lib/markdown";
+  import { linkAction, renderMarkdown } from "$lib/markdown";
 
   let { message }: { message: ChatMessage } = $props();
 
@@ -11,13 +11,22 @@
   const isMarkdown = $derived(message.role === "assistant" || message.role === "thought");
 
   /** Links must leave the app through the system browser: following them
-   * in the webview would replace the chat UI with the target page. */
+   * in the webview would replace the chat UI with the target page. The
+   * decision uses the raw href attribute (see linkAction). */
   function onLinkClick(event: MouseEvent) {
     const anchor = (event.target as HTMLElement).closest("a");
-    if (!anchor?.href) return;
-    event.preventDefault();
-    if (/^https?:/.test(anchor.href)) {
-      openUrl(anchor.href).catch((error) => console.error("failed to open link", error));
+    if (!anchor) return;
+    const href = anchor.getAttribute("href");
+    switch (linkAction(href)) {
+      case "external":
+        event.preventDefault();
+        if (href) openUrl(href).catch((error) => console.error("failed to open link", error));
+        break;
+      case "blocked":
+        event.preventDefault();
+        break;
+      case "internal":
+        break;
     }
   }
 </script>

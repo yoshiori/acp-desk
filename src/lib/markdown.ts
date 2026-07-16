@@ -17,3 +17,21 @@ const renderer = new MarkdownIt({
 export function renderMarkdown(text: string): string {
   return renderer.render(text);
 }
+
+export type LinkAction = "external" | "internal" | "blocked";
+
+/**
+ * Decides what a click on a rendered link should do, from the *raw* href
+ * attribute (`anchor.href` would resolve relative/hash links against the
+ * app URL and make everything look absolute):
+ * - http(s) opens in the system browser,
+ * - pure hash links may scroll in place,
+ * - anything else (relative paths, other schemes) is blocked — following
+ *   it would navigate the webview away from the chat UI.
+ */
+export function linkAction(rawHref: string | null): LinkAction {
+  if (rawHref === null) return "internal";
+  if (/^https?:/i.test(rawHref)) return "external";
+  if (rawHref.startsWith("#")) return "internal";
+  return "blocked";
+}
