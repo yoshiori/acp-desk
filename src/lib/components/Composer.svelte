@@ -6,6 +6,17 @@
   }: { busy: boolean; onsend: (text: string) => void; oncancel: () => void } = $props();
 
   let draft = $state("");
+  // One cancel per turn: disable Stop after the click and recover when the
+  // turn actually ends (busy drops), since cancellation is asynchronous.
+  let stopping = $state(false);
+  $effect(() => {
+    if (!busy) stopping = false;
+  });
+
+  function stop() {
+    stopping = true;
+    oncancel();
+  }
 
   function submit() {
     if (!draft.trim() || busy) return;
@@ -36,7 +47,9 @@
     {onkeydown}
   ></textarea>
   {#if busy}
-    <button type="button" class="stop" onclick={() => oncancel()}>Stop</button>
+    <button type="button" class="stop" disabled={stopping} onclick={stop}>
+      {stopping ? "Stopping…" : "Stop"}
+    </button>
   {:else}
     <button type="submit" disabled={!draft.trim()}>Send</button>
   {/if}

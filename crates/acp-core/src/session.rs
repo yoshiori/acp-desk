@@ -127,27 +127,29 @@ pub async fn run_session(
                 // Keep listening for Cancel while the turn runs. The agent
                 // answers a cancelled turn with stop_reason "cancelled", so
                 // cancellation still flows out through the response below.
+                // One session/cancel per turn is enough: repeated Stop
+                // clicks or a channel close right after a manual cancel
+                // must not spam the agent.
+                let mut cancel_sent = false;
                 let response = loop {
                     if !commands_open {
                         break (&mut turn).await;
                     }
                     select! {
                         response = &mut turn => break response,
-                        command = commands.next() => match command {
-                            // The UI refuses to send prompts while busy;
-                            // drop any that race through.
-                            Some(SessionCommand::Prompt(_)) => {}
-                            Some(SessionCommand::Cancel) => {
+                        command = commands.next() => {
+                            match command {
+                                // The UI refuses to send prompts while busy;
+                                // drop any that race through.
+                                Some(SessionCommand::Prompt(_)) => continue,
+                                Some(SessionCommand::Cancel) => {}
+                                None => commands_open = false,
+                            }
+                            if !cancel_sent {
+                                cancel_sent = true;
                                 // Unblock pending permission dialogs first
                                 // or the agent may never get to process the
                                 // cancellation.
-                                turn_permissions.cancel_pending();
-                                cx.send_notification(CancelNotification::new(
-                                    session.session_id.clone(),
-                                ))?;
-                            }
-                            None => {
-                                commands_open = false;
                                 turn_permissions.cancel_pending();
                                 cx.send_notification(CancelNotification::new(
                                     session.session_id.clone(),
