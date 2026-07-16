@@ -117,11 +117,16 @@ impl AcpBridge {
     /// broker. A replaced session took its broker with it, so answers to a
     /// stale dialog fail with "unknown request" instead of leaking across.
     pub fn respond_permission(&self, request_id: u64, option_id: &str) -> Result<(), String> {
-        let guard = self.session.lock().expect("bridge lock poisoned");
-        let handle = guard
-            .as_ref()
-            .ok_or_else(|| "no active session; start an agent first".to_string())?;
-        handle.permissions.resolve(request_id, option_id)
+        // Clone the broker out of the session lock so resolve (which takes
+        // its own lock and wakes the handler) runs without nesting locks.
+        let permissions = {
+            let guard = self.session.lock().expect("bridge lock poisoned");
+            let handle = guard
+                .as_ref()
+                .ok_or_else(|| "no active session; start an agent first".to_string())?;
+            Arc::clone(&handle.permissions)
+        };
+        permissions.resolve(request_id, option_id)
     }
 }
 

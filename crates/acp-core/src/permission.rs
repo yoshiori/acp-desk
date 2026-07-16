@@ -42,16 +42,19 @@ impl PermissionBroker {
         request: &RequestPermissionRequest,
     ) -> (UiEvent, oneshot::Receiver<RequestPermissionOutcome>) {
         let (answer_tx, answer_rx) = oneshot::channel();
-        let mut state = self.state.lock().expect("permission broker lock poisoned");
-        state.next_id += 1;
-        let request_id = state.next_id;
-        state.pending.insert(
-            request_id,
-            Pending {
-                options: request.options.clone(),
-                answer: answer_tx,
-            },
-        );
+        let request_id = {
+            let mut state = self.state.lock().expect("permission broker lock poisoned");
+            state.next_id += 1;
+            let request_id = state.next_id;
+            state.pending.insert(
+                request_id,
+                Pending {
+                    options: request.options.clone(),
+                    answer: answer_tx,
+                },
+            );
+            request_id
+        };
 
         let event = UiEvent::PermissionRequested {
             request_id,
@@ -74,24 +77,31 @@ impl PermissionBroker {
     /// (stale UI state, duplicated clicks), keeping the request pending in
     /// the latter case so a valid answer can still arrive.
     pub fn resolve(&self, request_id: u64, option_id: &str) -> Result<(), String> {
-        let mut state = self.state.lock().expect("permission broker lock poisoned");
-        let pending = state.pending.get(&request_id).ok_or_else(|| {
-            format!("permission request {request_id} is unknown or already answered")
-        })?;
-        let selected = pending
-            .options
-            .iter()
-            .find(|option| option.option_id.0.as_ref() == option_id)
-            .map(|option| option.option_id.clone())
-            .ok_or_else(|| {
-                format!("option \"{option_id}\" was not offered for permission request {request_id}")
+        // Take the answer channel under the lock, send after releasing it:
+        // sending wakes the awaiting handler, which shouldn't run with our
+        // lock held.
+        let (selected, answer) = {
+            let mut state = self.state.lock().expect("permission broker lock poisoned");
+            let pending = state.pending.get(&request_id).ok_or_else(|| {
+                format!("permission request {request_id} is unknown or already answered")
             })?;
-        let pending = state
-            .pending
-            .remove(&request_id)
-            .expect("entry existence checked above");
-        pending
-            .answer
+            let selected = pending
+                .options
+                .iter()
+                .find(|option| option.option_id.0.as_ref() == option_id)
+                .map(|option| option.option_id.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "option \"{option_id}\" was not offered for permission request {request_id}"
+                    )
+                })?;
+            let pending = state
+                .pending
+                .remove(&request_id)
+                .expect("entry existence checked above");
+            (selected, pending.answer)
+        };
+        answer
             .send(RequestPermissionOutcome::Selected(
                 SelectedPermissionOutcome::new(selected),
             ))
