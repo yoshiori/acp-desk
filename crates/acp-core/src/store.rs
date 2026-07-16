@@ -24,7 +24,7 @@ const MIGRATIONS: &[&str] = &["
 
     CREATE TABLE messages (
       id             INTEGER PRIMARY KEY,
-      session_id     TEXT NOT NULL REFERENCES sessions(id),
+      session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       acp_message_id TEXT,
       role           TEXT NOT NULL CHECK (role IN
                        ('user','assistant','thought','tool','system')),
@@ -36,7 +36,7 @@ const MIGRATIONS: &[&str] = &["
 
     CREATE TABLE usage_events (
       id            INTEGER PRIMARY KEY,
-      session_id    TEXT NOT NULL REFERENCES sessions(id),
+      session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       used_tokens   INTEGER NOT NULL,
       context_size  INTEGER NOT NULL,
       cost_amount   REAL,
@@ -75,6 +75,9 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // Writer (session thread) and readers (UI queries) share the file;
+        // without a timeout a locked database surfaces as an instant error.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         Self::migrate(&conn)?;
         Ok(Self { conn })
     }
@@ -335,6 +338,28 @@ mod tests {
             .map(|m| m.role)
             .collect();
         assert_eq!(roles, ["user", "tool", "assistant"]);
+    }
+
+    #[test]
+    fn deleting_a_session_cascades_to_its_rows() {
+        let store = Store::open_in_memory().unwrap();
+        store.record_session("s1", "Claude Code", "/tmp", 100).unwrap();
+        store.append_message("s1", &text_message("user", "hi"), 1).unwrap();
+        store
+            .record_usage("s1", 100, 200_000, None, None, 2)
+            .unwrap();
+
+        store
+            .conn
+            .execute("DELETE FROM sessions WHERE id = 's1'", [])
+            .unwrap();
+
+        assert_eq!(store.load_messages("s1").unwrap(), vec![]);
+        let usage: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM usage_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(usage, 0);
     }
 
     #[test]
