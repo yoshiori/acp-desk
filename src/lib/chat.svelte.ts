@@ -83,7 +83,14 @@ export class ChatController {
       this.state.sessionId = summary.id;
       addSystemMessage(this.state, `Resumed session with ${summary.agentName}.`);
     } catch (error) {
-      addSystemMessage(this.state, `Failed to resume session: ${error}`);
+      // The view must only switch after the resume succeeded: a failure
+      // happens before the backend replaces the session, so the previous
+      // session is still the one prompts go to — showing the restored
+      // transcript instead would route input to the wrong agent.
+      addSystemMessage(
+        this.state,
+        `Failed to resume "${summary.title ?? summary.agentName}": ${error}`,
+      );
     }
   }
 
@@ -95,6 +102,8 @@ export class ChatController {
       this.state = initialState();
       addSystemMessage(this.state, `Starting ${this.selectedAgent}…`);
     } catch (error) {
+      // Same as resumeSession: on failure the previous session is still
+      // live, so its chat stays on screen and carries the error.
       addSystemMessage(this.state, `Failed to start ${this.selectedAgent}: ${error}`);
     }
   }
