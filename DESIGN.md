@@ -265,7 +265,8 @@ built-in agents by name.
 ### v0.2 — "It remembers" (evenings)
 
 - [x] SQLite schema + migrations (hand-rolled via `PRAGMA user_version`).
-- [ ] Session list sidebar, resumable sessions.
+- [x] Session list sidebar, resumable sessions (`session/load` replays the
+      agent's context; the transcript renders from SQLite).
 - [x] Permission dialog wired to `on_receive_request` — real user approve/deny
       for tool calls.
 - [ ] Tool call view: render `ToolCallStart` / `ToolCallUpdate` / `ToolCallEnd`

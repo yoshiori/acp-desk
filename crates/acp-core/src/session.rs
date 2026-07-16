@@ -4,12 +4,14 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SessionNotification, TextContent,
+    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer,
+    McpServerStdio, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
+    TextContent,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
 use futures::channel::mpsc::UnboundedReceiver;
@@ -46,6 +48,15 @@ pub enum SessionCommand {
     Cancel,
 }
 
+/// How to obtain the ACP session: create a fresh one, or restore a stored
+/// conversation with `session/load` (requires the agent's `loadSession`
+/// capability, e.g. claude-agent-acp).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionSetup {
+    New,
+    Load { session_id: String },
+}
+
 /// Runs one agent session until the prompt channel closes or the agent dies.
 ///
 /// Not `Send`: run it on a dedicated thread with a current-thread runtime.
@@ -53,6 +64,7 @@ pub enum SessionCommand {
 pub async fn run_session(
     config: AgentConfig,
     cwd: PathBuf,
+    setup: SessionSetup,
     mut commands: UnboundedReceiver<SessionCommand>,
     permissions: Arc<PermissionBroker>,
     on_event: impl Fn(UiEvent) + Clone + Send + Sync + 'static,
@@ -61,11 +73,20 @@ pub async fn run_session(
     let notification_events = on_event.clone();
     let permission_events = on_event.clone();
     let turn_permissions = Arc::clone(&permissions);
+    // session/load replays the whole conversation as notifications before it
+    // responds. The transcript store already holds that history (and the UI
+    // hydrates from it), so replayed events are dropped: forwarding them
+    // would duplicate every message in both the UI and the database.
+    let replaying = Arc::new(AtomicBool::new(false));
+    let replay_gate = Arc::clone(&replaying);
 
     Client
         .builder()
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {
+                if replay_gate.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
                 if let Some(event) = map_update(notification.update) {
                     notification_events(event);
                 }
@@ -93,12 +114,26 @@ pub async fn run_session(
             cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
                 .block_task()
                 .await?;
-            let session = cx
-                .send_request(NewSessionRequest::new(cwd))
-                .block_task()
-                .await?;
+            let session_id: SessionId = match setup {
+                SessionSetup::New => {
+                    cx.send_request(NewSessionRequest::new(cwd))
+                        .block_task()
+                        .await?
+                        .session_id
+                }
+                SessionSetup::Load { session_id } => {
+                    replaying.store(true, Ordering::Relaxed);
+                    let loaded = cx
+                        .send_request(LoadSessionRequest::new(session_id.clone(), cwd))
+                        .block_task()
+                        .await;
+                    replaying.store(false, Ordering::Relaxed);
+                    loaded?;
+                    SessionId::new(session_id)
+                }
+            };
             on_event(UiEvent::SessionReady {
-                session_id: session.session_id.0.to_string(),
+                session_id: session_id.0.to_string(),
             });
 
             // False once the command channel closes (the session was
@@ -118,7 +153,7 @@ pub async fn run_session(
 
                 let turn = cx
                     .send_request(PromptRequest::new(
-                        session.session_id.clone(),
+                        session_id.clone(),
                         vec![ContentBlock::Text(TextContent::new(text))],
                     ))
                     .block_task()
@@ -153,7 +188,7 @@ pub async fn run_session(
                                 // cancellation.
                                 turn_permissions.cancel_pending();
                                 cx.send_notification(CancelNotification::new(
-                                    session.session_id.clone(),
+                                    session_id.clone(),
                                 ))?;
                             }
                         },

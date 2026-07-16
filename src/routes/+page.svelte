@@ -5,6 +5,7 @@
   import Composer from "$lib/components/Composer.svelte";
   import MessageBubble from "$lib/components/MessageBubble.svelte";
   import PermissionCard from "$lib/components/PermissionCard.svelte";
+  import Sidebar from "$lib/components/Sidebar.svelte";
 
   const chat = new ChatController();
 
@@ -33,7 +34,14 @@
 </script>
 
 <div class="app">
-  <header>
+  <Sidebar
+    sessions={chat.sessions}
+    activeId={chat.state.sessionId}
+    onselect={(session) => chat.resumeSession(session)}
+    onnew={() => chat.newChat()}
+  />
+  <div class="chat">
+    <header>
     <h1>acp-desk</h1>
     <select
       aria-label="Agent"
@@ -64,11 +72,12 @@
     {/if}
   </main>
 
-  <Composer
-    busy={chat.state.busy}
-    onsend={(text) => chat.send(text)}
-    oncancel={() => chat.cancel()}
-  />
+    <Composer
+      busy={chat.state.busy}
+      onsend={(text) => chat.send(text)}
+      oncancel={() => chat.cancel()}
+    />
+  </div>
 </div>
 
 <style>
@@ -96,8 +105,13 @@
 
   .app {
     display: flex;
-    flex-direction: column;
     height: 100vh;
+  }
+  .chat {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
   }
   header {
     display: flex;

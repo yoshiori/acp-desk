@@ -6,8 +6,10 @@ import {
   addSystemMessage,
   addUserMessage,
   applyEvent,
+  hydrateFromTranscript,
   initialState,
   settlePermission,
+  type AcpEvent,
   type ChatState,
   type PermissionOption,
 } from "./chat-core";
@@ -17,13 +19,14 @@ export class ChatController {
   state = $state<ChatState>(initialState());
   agents = $state<ipc.AgentListing[]>([]);
   selectedAgent = $state<string | null>(null);
+  sessions = $state<ipc.SessionSummary[]>([]);
 
   #unlisten: UnlistenFn | null = null;
   #disposed = false;
 
   async init(): Promise<void> {
     try {
-      const unlisten = await ipc.onAcpEvent((event) => applyEvent(this.state, event));
+      const unlisten = await ipc.onAcpEvent((event) => this.#onEvent(event));
       // dispose() may have run while the listener registration was in flight
       // (component unmounted before init resolved).
       if (this.#disposed) {
@@ -31,6 +34,7 @@ export class ChatController {
         return;
       }
       this.#unlisten = unlisten;
+      void this.refreshSessions();
       this.agents = await ipc.listAgents();
       const first = this.agents.find((agent) => agent.available);
       if (first) {
@@ -44,6 +48,54 @@ export class ChatController {
       }
     } catch (error) {
       addSystemMessage(this.state, `Failed to initialize: ${error}`);
+    }
+  }
+
+  #onEvent(event: AcpEvent): void {
+    applyEvent(this.state, event);
+    // These are the moments a session row appears or changes (registration,
+    // title from the first prompt, updated_at); keep the sidebar in step.
+    if (event.type === "session_ready" || event.type === "turn_ended") {
+      void this.refreshSessions();
+    }
+  }
+
+  async refreshSessions(): Promise<void> {
+    try {
+      this.sessions = await ipc.listSessions();
+    } catch (error) {
+      // The sidebar is best-effort; a failed refresh keeps the last list.
+      console.error("failed to refresh sessions", error);
+    }
+  }
+
+  /** Restores a stored conversation: transcript from the local database,
+   * live context via session/load on a fresh agent process. */
+  async resumeSession(summary: ipc.SessionSummary): Promise<void> {
+    if (summary.id === this.state.sessionId) return;
+    try {
+      const transcript = await ipc.loadTranscript(summary.id);
+      await ipc.resumeSession(summary.id);
+      this.selectedAgent = summary.agentName;
+      this.state = hydrateFromTranscript(transcript);
+      // The backend confirms with session_ready once the load finishes; set
+      // the id now so a second click is a no-op instead of a reload.
+      this.state.sessionId = summary.id;
+      addSystemMessage(this.state, `Resumed session with ${summary.agentName}.`);
+    } catch (error) {
+      addSystemMessage(this.state, `Failed to resume session: ${error}`);
+    }
+  }
+
+  /** Starts a fresh session with the selected agent even if one is alive. */
+  async newChat(): Promise<void> {
+    if (!this.selectedAgent) return;
+    try {
+      await ipc.startSession(this.selectedAgent, true);
+      this.state = initialState();
+      addSystemMessage(this.state, `Starting ${this.selectedAgent}…`);
+    } catch (error) {
+      addSystemMessage(this.state, `Failed to start ${this.selectedAgent}: ${error}`);
     }
   }
 
