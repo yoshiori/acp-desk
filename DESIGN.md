@@ -205,45 +205,46 @@ Client
 
 ## 6. Data model (v0.2+)
 
-```sql
-CREATE TABLE agents (
-  id            INTEGER PRIMARY KEY,
-  name          TEXT NOT NULL,          -- "Claude Code (ACP)"
-  command       TEXT NOT NULL,          -- "/…/claude-agent-acp"
-  args_json     TEXT NOT NULL DEFAULT '[]',
-  env_json      TEXT NOT NULL DEFAULT '{}'
-);
+Implemented in `crates/acp-core/src/store.rs` (migration 1):
 
+```sql
 CREATE TABLE sessions (
   id            TEXT PRIMARY KEY,        -- ACP session id
-  agent_id      INTEGER NOT NULL REFERENCES agents(id),
+  agent_name    TEXT NOT NULL,
   cwd           TEXT NOT NULL,
-  title         TEXT,
-  created_at    INTEGER NOT NULL,
+  title         TEXT,                    -- first user message, truncated
+  created_at    INTEGER NOT NULL,        -- unix seconds
   updated_at    INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE messages (
-  id            INTEGER PRIMARY KEY,
-  session_id    TEXT NOT NULL REFERENCES sessions(id),
-  acp_message_id TEXT,                    -- from AgentMessageChunk.message_id
-  role          TEXT NOT NULL CHECK (role IN ('user','assistant','system')),
-  content_json  TEXT NOT NULL,            -- serialized ContentBlock[]
-  created_at    INTEGER NOT NULL
-);
+  id             INTEGER PRIMARY KEY,
+  session_id     TEXT NOT NULL REFERENCES sessions(id),
+  acp_message_id TEXT,                   -- from AgentMessageChunk.message_id
+  role           TEXT NOT NULL CHECK (role IN
+                   ('user','assistant','thought','tool','system')),
+  content_json   TEXT NOT NULL,          -- serialized content blocks
+  status         TEXT,                   -- tool rows: final call status
+  created_at     INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE usage_events (
   id            INTEGER PRIMARY KEY,
   session_id    TEXT NOT NULL REFERENCES sessions(id),
   used_tokens   INTEGER NOT NULL,
+  context_size  INTEGER NOT NULL,
   cost_amount   REAL,
   cost_currency TEXT,
-  ts            INTEGER NOT NULL
-);
+  created_at    INTEGER NOT NULL
+) STRICT;
 ```
 
 Rationale for storing raw `content_json`: ACP `ContentBlock` will grow (image,
 resource-link, etc.); we don't want to migrate the schema every time.
+
+The draft's `agents` table (with `agent_id` FK) is deferred to the
+user-editable agent list milestone; until then sessions reference the
+built-in agents by name.
 
 ## 7. Milestones
 
@@ -263,7 +264,7 @@ resource-link, etc.); we don't want to migrate the schema every time.
 
 ### v0.2 — "It remembers" (evenings)
 
-- [ ] SQLite schema + migrations (`refinery` or hand-rolled).
+- [x] SQLite schema + migrations (hand-rolled via `PRAGMA user_version`).
 - [ ] Session list sidebar, resumable sessions.
 - [x] Permission dialog wired to `on_receive_request` — real user approve/deny
       for tool calls.

@@ -4,23 +4,26 @@
 //! current-thread tokio runtime; prompts go in through a channel, events
 //! come back via `app.emit`.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use acp_core::{AgentConfig, PermissionBroker, SessionCommand, UiEvent};
+use acp_core::{
+    AgentConfig, PermissionBroker, SessionCommand, Store, TranscriptRecorder, UiEvent,
+};
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use tauri::{AppHandle, Emitter};
 
 /// Event channel name shared with the frontend (src/lib/ipc.ts).
 pub const ACP_EVENT: &str = "acp:event";
 
-#[derive(Default)]
 pub struct AcpBridge {
     session: Mutex<Option<SessionHandle>>,
     /// Bumped on every start(); a session thread only emits while it is the
     /// newest generation, so a replaced session finishing its last turn
     /// cannot leak events into the next session's UI state.
     generation: Arc<AtomicU64>,
+    db_path: PathBuf,
 }
 
 struct SessionHandle {
@@ -30,6 +33,14 @@ struct SessionHandle {
 }
 
 impl AcpBridge {
+    pub fn new(db_path: PathBuf) -> Self {
+        Self {
+            session: Mutex::new(None),
+            generation: Arc::default(),
+            db_path,
+        }
+    }
+
     /// Starts a session with the named agent. The replaced session gets a
     /// best-effort Cancel and its command channel dropped: a mid-turn
     /// session cancels the turn, finishes it, and exits its loop, which
@@ -43,6 +54,7 @@ impl AcpBridge {
         let session_permissions = Arc::clone(&permissions);
         let my_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let current_generation = Arc::clone(&self.generation);
+        let db_path = self.db_path.clone();
 
         std::thread::spawn(move || {
             let emit = move |app: &AppHandle, event: &UiEvent| {
@@ -67,6 +79,16 @@ impl AcpBridge {
                 .or_else(|_| std::env::var("HOME").map(Into::into))
                 .unwrap_or_else(|_| "/".into());
 
+            // Persistence must not take the chat down with it: a failed
+            // store open just means this session isn't recorded.
+            let recorder = Store::open(&db_path)
+                .map(|store| {
+                    TranscriptRecorder::new(store, config.name.clone(), cwd.display().to_string())
+                })
+                .map_err(|error| eprintln!("failed to open transcript store: {error:#}"))
+                .ok();
+            let recorder = Arc::new(Mutex::new(recorder));
+
             let event_app = app.clone();
             let event_emit = emit.clone();
             let result = runtime.block_on(acp_core::run_session(
@@ -74,7 +96,17 @@ impl AcpBridge {
                 cwd,
                 command_rx,
                 session_permissions,
-                move |event| event_emit(&event_app, &event),
+                // Record before the generation gate: a replaced session's
+                // final events still belong in its transcript even though
+                // they must not reach the new session's UI.
+                move |event| {
+                    if let Ok(mut guard) = recorder.lock()
+                        && let Some(recorder) = guard.as_mut()
+                    {
+                        recorder.observe(&event);
+                    }
+                    event_emit(&event_app, &event)
+                },
             ));
 
             if let Err(error) = result {

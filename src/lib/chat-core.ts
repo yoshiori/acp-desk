@@ -23,6 +23,7 @@ export type AcpEvent =
       options: PermissionOption[];
     }
   | { type: "session_ready"; sessionId: string }
+  | { type: "user_message"; text: string }
   | { type: "turn_ended"; stopReason: string }
   | { type: "agent_error"; message: string };
 
@@ -165,6 +166,10 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
       break;
     case "available_commands":
       // v0.1 has no slash-command UI; slash input is forwarded as plain text.
+      break;
+    case "user_message":
+      // Backend echo for the transcript recorder; the UI already showed its
+      // own copy when the prompt was sent.
       break;
   }
 }

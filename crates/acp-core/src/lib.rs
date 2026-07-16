@@ -4,7 +4,11 @@
 mod events;
 mod permission;
 mod session;
+mod store;
+mod transcript;
 
 pub use events::{CommandInfo, PermissionOptionInfo, UiEvent, map_update};
 pub use permission::PermissionBroker;
 pub use session::{AgentConfig, SessionCommand, run_session};
+pub use store::{MessageRow, SessionRow, Store};
+pub use transcript::TranscriptRecorder;
