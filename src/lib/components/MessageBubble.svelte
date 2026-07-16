@@ -1,7 +1,8 @@
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
 
-  import type { ChatMessage } from "$lib/chat-core";
+  import type { ChatMessage, ToolCallDetail } from "$lib/chat-core";
+  import { formatDiff } from "$lib/diff";
   import { linkAction, renderMarkdown } from "$lib/markdown";
 
   let { message }: { message: ChatMessage } = $props();
@@ -9,6 +10,17 @@
   // Agent output renders as markdown; user text stays verbatim (echoing
   // exactly what was typed is more predictable than reinterpreting it).
   const isMarkdown = $derived(message.role === "assistant" || message.role === "thought");
+
+  function hasContent(detail: ToolCallDetail | undefined): detail is ToolCallDetail {
+    return (
+      !!detail &&
+      (!!detail.contentText ||
+        detail.diffs.length > 0 ||
+        !!detail.rawInputJson ||
+        !!detail.rawOutputJson ||
+        detail.locations.length > 0)
+    );
+  }
 
   /** Links must leave the app through the system browser: following them
    * in the webview would replace the chat UI with the target page. The
@@ -33,10 +45,44 @@
 </script>
 
 {#if message.role === "tool"}
-  <div class="tool" data-status={message.status}>
-    <span class="tool-status">{message.status ?? "pending"}</span>
-    <span class="tool-title">{message.text}</span>
-  </div>
+  {#if hasContent(message.detail)}
+    <details class="tool expandable" data-status={message.status}>
+      <summary>
+        <span class="tool-status">{message.status ?? "pending"}</span>
+        <span class="tool-title">{message.text}</span>
+      </summary>
+      <div class="tool-detail">
+        {#if message.detail.locations.length > 0}
+          <div class="detail-label">files</div>
+          <div class="detail-locations">{message.detail.locations.join("\n")}</div>
+        {/if}
+        {#if message.detail.rawInputJson}
+          <div class="detail-label">input</div>
+          <pre>{message.detail.rawInputJson}</pre>
+        {/if}
+        {#each message.detail.diffs as diff (diff.path)}
+          <div class="detail-label">diff · {diff.path}</div>
+          <pre class="diff">{#each formatDiff(diff.oldText, diff.newText) as line, index (index)}<span
+              class:add={line.startsWith("+")}
+              class:del={line.startsWith("-")}>{line}
+</span>{/each}</pre>
+        {/each}
+        {#if message.detail.contentText}
+          <div class="detail-label">output</div>
+          <pre>{message.detail.contentText}</pre>
+        {/if}
+        {#if message.detail.rawOutputJson}
+          <div class="detail-label">raw output</div>
+          <pre>{message.detail.rawOutputJson}</pre>
+        {/if}
+      </div>
+    </details>
+  {:else}
+    <div class="tool" data-status={message.status}>
+      <span class="tool-status">{message.status ?? "pending"}</span>
+      <span class="tool-title">{message.text}</span>
+    </div>
+  {/if}
 {:else if isMarkdown}
   <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
   <div class="bubble markdown {message.role}" onclick={onLinkClick}>
@@ -85,12 +131,63 @@
   }
   .tool {
     align-self: flex-start;
-    display: flex;
-    gap: 0.6em;
-    align-items: baseline;
     font-size: 0.85em;
     color: var(--muted);
     font-family: var(--mono);
+  }
+  div.tool,
+  .tool summary {
+    display: flex;
+    gap: 0.6em;
+    align-items: baseline;
+  }
+  .tool summary {
+    cursor: pointer;
+    list-style: none;
+  }
+  .tool summary::-webkit-details-marker {
+    display: none;
+  }
+  .tool summary::before {
+    content: "▸";
+    font-size: 0.8em;
+  }
+  .tool[open] summary::before {
+    content: "▾";
+  }
+  .tool-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25em;
+    margin: 0.4em 0 0.2em 1.1em;
+    max-width: 56em;
+  }
+  .detail-label {
+    margin-top: 0.35em;
+    opacity: 0.8;
+  }
+  .detail-locations {
+    white-space: pre;
+  }
+  .tool-detail pre {
+    margin: 0;
+    padding: 0.5em 0.7em;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: auto;
+    max-height: 22em;
+    color: initial;
+  }
+  @media (prefers-color-scheme: dark) {
+    .tool-detail pre {
+      color: #f4f4f5;
+    }
+  }
+  pre.diff .add {
+    color: #16a34a;
+  }
+  pre.diff .del {
+    color: #dc2626;
   }
   .tool-status {
     padding: 0.1em 0.5em;
