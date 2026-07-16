@@ -23,6 +23,10 @@ export class ChatController {
 
   #unlisten: UnlistenFn | null = null;
   #disposed = false;
+  /** True while a resume/new-chat transition is in flight. Overlapping
+   * transitions may finish out of order, leaving the view on one session
+   * while the backend runs another; later clicks are dropped instead. */
+  #switching = false;
 
   async init(): Promise<void> {
     try {
@@ -72,7 +76,8 @@ export class ChatController {
   /** Restores a stored conversation: transcript from the local database,
    * live context via session/load on a fresh agent process. */
   async resumeSession(summary: ipc.SessionSummary): Promise<void> {
-    if (summary.id === this.state.sessionId) return;
+    if (this.#switching || summary.id === this.state.sessionId) return;
+    this.#switching = true;
     try {
       const transcript = await ipc.loadTranscript(summary.id);
       await ipc.resumeSession(summary.id);
@@ -91,12 +96,15 @@ export class ChatController {
         this.state,
         `Failed to resume "${summary.title ?? summary.agentName}": ${error}`,
       );
+    } finally {
+      this.#switching = false;
     }
   }
 
   /** Starts a fresh session with the selected agent even if one is alive. */
   async newChat(): Promise<void> {
-    if (!this.selectedAgent) return;
+    if (this.#switching || !this.selectedAgent) return;
+    this.#switching = true;
     try {
       await ipc.startSession(this.selectedAgent, true);
       this.state = initialState();
@@ -105,6 +113,8 @@ export class ChatController {
       // Same as resumeSession: on failure the previous session is still
       // live, so its chat stays on screen and carries the error.
       addSystemMessage(this.state, `Failed to start ${this.selectedAgent}: ${error}`);
+    } finally {
+      this.#switching = false;
     }
   }
 
