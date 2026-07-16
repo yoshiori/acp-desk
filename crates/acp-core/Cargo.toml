@@ -1,0 +1,16 @@
+[package]
+name = "acp-core"
+description = "ACP client logic for acp-desk, kept free of Tauri so it can be unit-tested anywhere"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agent-client-protocol = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
