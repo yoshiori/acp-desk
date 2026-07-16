@@ -80,7 +80,9 @@ export class ChatController {
       await ipc.respondPermission(requestId, option.optionId);
       settlePermission(this.state, requestId, option.name);
     } catch (error) {
-      addSystemMessage(this.state, `Failed to answer permission request: ${error}`);
+      // Settle on failure too: the backend no longer accepts an answer for
+      // this request, so leaving the card would keep a dead, disabled UI.
+      settlePermission(this.state, requestId, `failed (${error})`);
     }
   }
 

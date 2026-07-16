@@ -97,6 +97,18 @@ impl PermissionBroker {
             ))
             .map_err(|_| "the agent session ended before the permission was answered".to_string())
     }
+
+    /// Cancels every pending request. Called when a turn ends: the agent no
+    /// longer waits for those answers, so keeping them would only accumulate
+    /// dead entries. Dropping the senders resolves the handlers' receivers
+    /// with an error, which they answer as `Cancelled`.
+    pub fn cancel_pending(&self) {
+        self.state
+            .lock()
+            .expect("permission broker lock poisoned")
+            .pending
+            .clear();
+    }
 }
 
 fn tool_title(request: &RequestPermissionRequest) -> String {
@@ -222,6 +234,17 @@ mod tests {
         assert!(answer.try_recv().expect("still open").is_none());
 
         broker.resolve(1, "reject").expect("valid answer still lands");
+    }
+
+    #[test]
+    fn cancel_pending_cancels_answers_and_forgets_requests() {
+        let broker = PermissionBroker::default();
+        let (_event, mut answer) = broker.begin(&request_with_options());
+
+        broker.cancel_pending();
+
+        assert!(answer.try_recv().is_err());
+        assert!(broker.resolve(1, "allow").is_err());
     }
 
     #[test]

@@ -52,6 +52,7 @@ pub async fn run_session(
     let agent = config.to_agent();
     let notification_events = on_event.clone();
     let permission_events = on_event.clone();
+    let turn_permissions = Arc::clone(&permissions);
 
     Client
         .builder()
@@ -100,6 +101,9 @@ pub async fn run_session(
                     ))
                     .block_task()
                     .await?;
+                // The turn is over, so nobody waits on unanswered permission
+                // requests anymore; drop them instead of accumulating.
+                turn_permissions.cancel_pending();
                 on_event(UiEvent::TurnEnded {
                     stop_reason: stop_reason_str(&response.stop_reason),
                 });

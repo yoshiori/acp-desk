@@ -27,6 +27,7 @@
   <div class="options">
     {#each request.options as option (option.optionId)}
       <button
+        type="button"
         class={option.kind.startsWith("allow") ? "allow" : "reject"}
         disabled={answered}
         onclick={() => pick(option)}
