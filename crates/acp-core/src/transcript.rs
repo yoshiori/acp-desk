@@ -53,6 +53,10 @@ impl TranscriptRecorder {
                 });
             }
             UiEvent::UserMessage { text } => {
+                // The session loop always ends a turn before accepting the
+                // next prompt, but flush defensively so transcript order
+                // survives even if that invariant ever changes.
+                self.flush_turn();
                 let row = MessageRow {
                     role: "user".to_string(),
                     content_json: text_content_json(text),

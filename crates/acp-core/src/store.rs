@@ -93,8 +93,12 @@ impl Store {
     fn migrate(conn: &Connection) -> anyhow::Result<()> {
         let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         for (index, statements) in MIGRATIONS.iter().enumerate().skip(version as usize) {
-            conn.execute_batch(statements)?;
-            conn.pragma_update(None, "user_version", (index + 1) as i64)?;
+            // Each migration commits atomically with its version bump, so a
+            // failed statement can't leave a half-migrated database behind.
+            conn.execute_batch(&format!(
+                "BEGIN IMMEDIATE;\n{statements}\nPRAGMA user_version = {};\nCOMMIT;",
+                index + 1
+            ))?;
         }
         Ok(())
     }
@@ -138,16 +142,13 @@ impl Store {
                 now
             ],
         )?;
+        let title = (message.role == "user")
+            .then(|| title_of(&message.content_json))
+            .flatten();
         self.conn.execute(
-            "UPDATE sessions SET updated_at = ?2,
-               title = COALESCE(title, CASE WHEN ?3 = 'user' THEN ?4 END)
+            "UPDATE sessions SET updated_at = ?2, title = COALESCE(title, ?3)
              WHERE id = ?1",
-            params![
-                session_id,
-                now,
-                message.role,
-                title_of(&message.content_json)
-            ],
+            params![session_id, now, title],
         )?;
         Ok(())
     }
@@ -223,12 +224,14 @@ pub fn text_content_json(text: &str) -> String {
     serde_json::json!([{ "type": "text", "text": text }]).to_string()
 }
 
-/// First text block of a content array, truncated for use as a title.
+/// First non-empty line of the first text block, truncated for use as a
+/// title (multi-line prompts would make a messy sidebar).
 fn title_of(content_json: &str) -> Option<String> {
     const MAX_TITLE_CHARS: usize = 80;
     let blocks: serde_json::Value = serde_json::from_str(content_json).ok()?;
     let text = blocks.get(0)?.get("text")?.as_str()?;
-    Some(text.chars().take(MAX_TITLE_CHARS).collect())
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    Some(line.chars().take(MAX_TITLE_CHARS).collect())
 }
 
 #[cfg(test)]
@@ -298,6 +301,23 @@ mod tests {
         let sessions = store.list_sessions().unwrap();
         assert_eq!(sessions[0].title.as_deref(), Some("fix the login bug"));
         assert_eq!(sessions[0].updated_at, 120);
+    }
+
+    #[test]
+    fn title_uses_the_first_non_empty_line_of_multiline_prompts() {
+        let store = Store::open_in_memory().unwrap();
+        store.record_session("s1", "Claude Code", "/tmp", 100).unwrap();
+        store
+            .append_message(
+                "s1",
+                &text_message("user", "\n  fix this bug:\n```rust\npanic!()\n```"),
+                110,
+            )
+            .unwrap();
+        assert_eq!(
+            store.list_sessions().unwrap()[0].title.as_deref(),
+            Some("fix this bug:")
+        );
     }
 
     #[test]
