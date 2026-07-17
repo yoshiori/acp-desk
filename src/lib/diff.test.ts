@@ -44,3 +44,17 @@ describe("formatDiff with missing old text", () => {
     expect(formatDiff(undefined, "only")).toEqual(["+only"]);
   });
 });
+
+describe("formatDiff edge cases from review", () => {
+  it("produces no lines for an empty new file instead of a phantom +", () => {
+    expect(formatDiff(null, "")).toEqual([]);
+  });
+
+  it("emptying a file shows only removals", () => {
+    expect(formatDiff("a\nb", "")).toEqual(["-a", "-b"]);
+  });
+
+  it("normalizes CRLF line endings before comparing", () => {
+    expect(formatDiff("a\r\nb\r\nc", "a\r\nB\r\nc")).toEqual([" a", "-b", "+B", " c"]);
+  });
+});

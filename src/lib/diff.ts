@@ -8,14 +8,21 @@
 
 const CONTEXT_LINES = 2;
 
+/** `"".split` yields `[""]`, which would render a phantom empty line for
+ * empty files; CRLF endings would leave `\r` on every line and defeat the
+ * old/new line comparison. */
+function splitLines(text: string): string[] {
+  return text === "" ? [] : text.split(/\r?\n/);
+}
+
 /** Returns display lines prefixed like a unified diff: " " context,
  * "-" removed, "+" added. A missing `oldText` means a brand-new file. */
 export function formatDiff(oldText: string | null | undefined, newText: string): string[] {
-  const newLines = newText.split("\n");
+  const newLines = splitLines(newText);
   if (oldText == null) {
     return newLines.map((line) => `+${line}`);
   }
-  const oldLines = oldText.split("\n");
+  const oldLines = splitLines(oldText);
 
   let start = 0;
   while (
