@@ -5,9 +5,29 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { AcpEvent, StoredUsage, TranscriptRow } from "./chat-core";
 
-export interface AgentListing {
+export interface EnvPair {
   name: string;
+  value: string;
+}
+
+/** Mirror of the backend AgentListing (AgentRow flattened + availability). */
+export interface AgentListing {
+  id: number;
+  name: string;
+  command: string;
+  args: string[];
+  env: EnvPair[];
+  /** Whether the command exists on disk right now. */
   available: boolean;
+}
+
+/** Input for save_agent; id null creates, id set updates. */
+export interface AgentSpec {
+  id: number | null;
+  name: string;
+  command: string;
+  args: string[];
+  env: EnvPair[];
 }
 
 /** Mirror of acp-core's SessionRow serde shape (camelCase fields). */
@@ -23,6 +43,15 @@ export interface SessionSummary {
 
 export function listAgents(): Promise<AgentListing[]> {
   return invoke<AgentListing[]>("list_agents");
+}
+
+/** Resolves to the saved agent's id. */
+export function saveAgent(spec: AgentSpec): Promise<number> {
+  return invoke<number>("save_agent", { spec });
+}
+
+export function deleteAgent(id: number): Promise<void> {
+  return invoke<void>("delete_agent", { id });
 }
 
 /** Resolves to true when a fresh session was started, false when the
