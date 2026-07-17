@@ -8,6 +8,7 @@ import {
   applyEvent,
   hydrateFromTranscript,
   initialState,
+  restoreUsage,
   settlePermission,
   type AcpEvent,
   type ChatState,
@@ -79,13 +80,17 @@ export class ChatController {
     if (this.#switching || summary.id === this.state.sessionId) return;
     this.#switching = true;
     try {
-      const transcript = await ipc.loadTranscript(summary.id);
+      const [transcript, usage] = await Promise.all([
+        ipc.loadTranscript(summary.id),
+        ipc.loadUsage(summary.id),
+      ]);
       await ipc.resumeSession(summary.id);
       this.selectedAgent = summary.agentName;
       this.state = hydrateFromTranscript(transcript);
       // The backend confirms with session_ready once the load finishes; set
       // the id now so a second click is a no-op instead of a reload.
       this.state.sessionId = summary.id;
+      if (usage) restoreUsage(this.state, usage);
       addSystemMessage(this.state, `Resumed session with ${summary.agentName}.`);
     } catch (error) {
       // The view must only switch after the resume succeeded: a failure

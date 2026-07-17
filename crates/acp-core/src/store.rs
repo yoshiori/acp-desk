@@ -56,6 +56,16 @@ pub struct SessionRow {
     pub updated_at: i64,
 }
 
+/// Latest usage snapshot of a session, for restoring the header on resume.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageRow {
+    pub used_tokens: i64,
+    pub context_size: i64,
+    pub cost_amount: Option<f64>,
+    pub cost_currency: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRow {
@@ -216,6 +226,36 @@ impl Store {
                         title: row.get(3)?,
                         created_at: row.get(4)?,
                         updated_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// The most recent usage snapshot of a session; `None` when no usage
+    /// event was ever recorded. Tokens come from the newest row, cost from
+    /// the newest row that has one: mid-turn events are persisted with a
+    /// NULL cost (ACP sends the cumulative cost only at turn end), so a
+    /// cancelled or interrupted last turn must not erase the known total.
+    pub fn last_usage(&self, session_id: &str) -> anyhow::Result<Option<UsageRow>> {
+        use rusqlite::OptionalExtension;
+        let row = self
+            .conn
+            .query_row(
+                "SELECT u.used_tokens, u.context_size, c.cost_amount, c.cost_currency
+                 FROM usage_events u
+                 LEFT JOIN (SELECT cost_amount, cost_currency FROM usage_events
+                            WHERE session_id = ?1 AND cost_amount IS NOT NULL
+                            ORDER BY id DESC LIMIT 1) c
+                 WHERE u.session_id = ?1 ORDER BY u.id DESC LIMIT 1",
+                [session_id],
+                |row| {
+                    Ok(UsageRow {
+                        used_tokens: row.get(0)?,
+                        context_size: row.get(1)?,
+                        cost_amount: row.get(2)?,
+                        cost_currency: row.get(3)?,
                     })
                 },
             )
@@ -427,6 +467,40 @@ mod tests {
                 .append_message("ghost", &text_message("user", "hi"), 1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn last_usage_returns_the_newest_row_or_none() {
+        let store = Store::open_in_memory().unwrap();
+        store.record_session("s1", "Claude Code", "/tmp", 100).unwrap();
+        assert_eq!(store.last_usage("s1").unwrap(), None);
+
+        store.record_usage("s1", 1000, 200_000, None, None, 110).unwrap();
+        store
+            .record_usage("s1", 1500, 200_000, Some(0.12), Some("USD"), 120)
+            .unwrap();
+
+        let usage = store.last_usage("s1").unwrap().unwrap();
+        assert_eq!(usage.used_tokens, 1500);
+        assert_eq!(usage.cost_amount, Some(0.12));
+        assert_eq!(usage.cost_currency.as_deref(), Some("USD"));
+        assert_eq!(store.last_usage("ghost").unwrap(), None);
+    }
+
+    #[test]
+    fn last_usage_keeps_the_newest_known_cost_when_later_rows_lack_one() {
+        let store = Store::open_in_memory().unwrap();
+        store.record_session("s1", "Claude Code", "/tmp", 100).unwrap();
+        store
+            .record_usage("s1", 1000, 200_000, Some(0.12), Some("USD"), 110)
+            .unwrap();
+        // A cancelled/interrupted turn leaves trailing cost-less rows.
+        store.record_usage("s1", 1800, 200_000, None, None, 120).unwrap();
+
+        let usage = store.last_usage("s1").unwrap().unwrap();
+        assert_eq!(usage.used_tokens, 1800);
+        assert_eq!(usage.cost_amount, Some(0.12));
+        assert_eq!(usage.cost_currency.as_deref(), Some("USD"));
     }
 
     #[test]

@@ -3,7 +3,7 @@ mod bridge;
 
 use std::path::PathBuf;
 
-use acp_core::{MessageRow, SessionRow, SessionSetup, Store};
+use acp_core::{MessageRow, SessionRow, SessionSetup, Store, UsageRow};
 use bridge::AcpBridge;
 use tauri::{AppHandle, Manager, State};
 
@@ -72,6 +72,16 @@ fn load_transcript(
 }
 
 #[tauri::command]
+fn load_usage(
+    bridge: State<'_, AcpBridge>,
+    session_id: String,
+) -> Result<Option<UsageRow>, String> {
+    open_store(&bridge)?
+        .last_usage(&session_id)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 fn send_prompt(bridge: State<'_, AcpBridge>, text: String) -> Result<(), String> {
     bridge.send_prompt(text)
 }
@@ -125,6 +135,7 @@ pub fn run() {
             resume_session,
             list_sessions,
             load_transcript,
+            load_usage,
             send_prompt,
             cancel_turn,
             respond_permission

@@ -5,6 +5,7 @@ import {
   applyEvent,
   hydrateFromTranscript,
   initialState,
+  restoreUsage,
   settlePermission,
   type AcpEvent,
   type ChatState,
@@ -108,6 +109,7 @@ describe("usage", () => {
       contextSize: 200_000,
       costAmount: 0.1,
       costCurrency: "USD",
+      lastTurnCost: null,
     });
   });
 });
@@ -349,5 +351,89 @@ describe("tool call details", () => {
       },
     ]);
     expect(state.messages[0].detail).toBeUndefined();
+  });
+});
+
+describe("per-turn cost", () => {
+  function usage(costAmount: number | null): AcpEvent {
+    return { type: "usage", usedTokens: 100, contextSize: 200_000, costAmount, costCurrency: costAmount === null ? null : "USD" };
+  }
+  const turnEnd: AcpEvent = { type: "turn_ended", stopReason: "end_turn" };
+
+  it("does not report a turn cost after the first turn", () => {
+    const state = initialState();
+    applyAll(state, [usage(0.05), turnEnd]);
+    expect(state.usage?.lastTurnCost).toBeNull();
+  });
+
+  it("reports the cumulative delta from the second turn onward", () => {
+    const state = initialState();
+    applyAll(state, [usage(0.05), turnEnd, usage(0.08), turnEnd]);
+    expect(state.usage?.lastTurnCost).toBeCloseTo(0.03);
+  });
+
+  it("a turn without any cost update reports no turn cost", () => {
+    const state = initialState();
+    applyAll(state, [usage(0.05), turnEnd, turnEnd]);
+    expect(state.usage?.lastTurnCost).toBeNull();
+  });
+
+  it("restoreUsage seeds the baseline so the next delta is correct", () => {
+    const state = initialState();
+    restoreUsage(state, {
+      usedTokens: 1500,
+      contextSize: 200_000,
+      costAmount: 0.12,
+      costCurrency: "USD",
+    });
+    expect(state.usage?.costAmount).toBe(0.12);
+    expect(state.usage?.lastTurnCost).toBeNull();
+    applyAll(state, [usage(0.2), turnEnd]);
+    expect(state.usage?.lastTurnCost).toBeCloseTo(0.08);
+  });
+});
+
+describe("cost epochs across resume", () => {
+  function usage(costAmount: number | null): AcpEvent {
+    return { type: "usage", usedTokens: 100, contextSize: 200_000, costAmount, costCurrency: costAmount === null ? null : "USD" };
+  }
+  const turnEnd: AcpEvent = { type: "turn_ended", stopReason: "end_turn" };
+  const stored = {
+    usedTokens: 1500,
+    contextSize: 200_000,
+    costAmount: 0.079,
+    costCurrency: "USD",
+  };
+
+  it("a fresh agent process restarting its counter does not regress the total", () => {
+    const state = initialState();
+    restoreUsage(state, stored);
+    applyAll(state, [usage(0.007), turnEnd]);
+    expect(state.usage?.costAmount).toBeCloseTo(0.086);
+    expect(state.usage?.lastTurnCost).toBeCloseTo(0.007);
+  });
+
+  it("an agent continuing its counter is not double-counted", () => {
+    const state = initialState();
+    restoreUsage(state, stored);
+    applyAll(state, [usage(0.085), turnEnd]);
+    expect(state.usage?.costAmount).toBeCloseTo(0.085);
+    expect(state.usage?.lastTurnCost).toBeCloseTo(0.006);
+  });
+
+  it("later turns in the restarted process stay in the offset space", () => {
+    const state = initialState();
+    restoreUsage(state, stored);
+    applyAll(state, [usage(0.007), turnEnd, usage(0.019), turnEnd]);
+    expect(state.usage?.costAmount).toBeCloseTo(0.098);
+    expect(state.usage?.lastTurnCost).toBeCloseTo(0.012);
+  });
+
+  it("sessions without a stored cost behave like a first run", () => {
+    const state = initialState();
+    restoreUsage(state, { ...stored, costAmount: null, costCurrency: null });
+    applyAll(state, [usage(0.01), turnEnd]);
+    expect(state.usage?.costAmount).toBeCloseTo(0.01);
+    expect(state.usage?.lastTurnCost).toBeNull();
   });
 });

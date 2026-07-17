@@ -12,5 +12,5 @@ pub use events::{
 };
 pub use permission::PermissionBroker;
 pub use session::{AgentConfig, SessionCommand, SessionSetup, run_session};
-pub use store::{MessageRow, SessionRow, Store};
+pub use store::{MessageRow, SessionRow, Store, UsageRow};
 pub use transcript::TranscriptRecorder;
