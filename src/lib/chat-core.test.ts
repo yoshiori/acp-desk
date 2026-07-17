@@ -70,8 +70,25 @@ describe("tool calls", () => {
   it("adds a tool entry and updates its status in place", () => {
     const state = initialState();
     applyAll(state, [
-      { type: "tool_call", toolCallId: "tc1", title: "Run ls", kind: "execute", status: "pending" },
-      { type: "tool_call_update", toolCallId: "tc1", title: null, status: "completed" },
+      {
+        type: "tool_call",
+        toolCallId: "tc1",
+        title: "Run ls",
+        kind: "execute",
+        status: "pending",
+        detail: { contentText: null, diffs: [], rawInputJson: null, rawOutputJson: null, locations: [] },
+      },
+      {
+        type: "tool_call_update",
+        toolCallId: "tc1",
+        title: null,
+        status: "completed",
+        contentText: null,
+        diffs: null,
+        rawInputJson: null,
+        rawOutputJson: null,
+        locations: null,
+      },
     ]);
     expect(state.messages).toHaveLength(1);
     expect(state.messages[0].status).toBe("completed");
@@ -256,5 +273,81 @@ describe("hydrateFromTranscript", () => {
     ]);
     addUserMessage(state, "again");
     expect(state.messages.at(-1)?.key).toBe(1);
+  });
+});
+
+describe("tool call details", () => {
+  const detail = {
+    contentText: null,
+    diffs: [],
+    rawInputJson: '{"cmd": "ls"}',
+    rawOutputJson: null,
+    locations: [],
+  };
+
+  function toolCall(): AcpEvent {
+    return {
+      type: "tool_call",
+      toolCallId: "tc1",
+      title: "Run ls",
+      kind: "execute",
+      status: "pending",
+      detail,
+    };
+  }
+
+  it("keeps the detail on the tool message", () => {
+    const state = initialState();
+    applyEvent(state, toolCall());
+    expect(state.messages[0].detail?.rawInputJson).toBe('{"cmd": "ls"}');
+  });
+
+  it("merges only the fields an update carries", () => {
+    const state = initialState();
+    applyEvent(state, toolCall());
+    applyEvent(state, {
+      type: "tool_call_update",
+      toolCallId: "tc1",
+      title: null,
+      status: "completed",
+      contentText: "listing",
+      diffs: null,
+      rawInputJson: null,
+      rawOutputJson: '{"files": 3}',
+      locations: null,
+    });
+    const message = state.messages[0];
+    expect(message.status).toBe("completed");
+    expect(message.detail?.contentText).toBe("listing");
+    expect(message.detail?.rawInputJson).toBe('{"cmd": "ls"}');
+    expect(message.detail?.rawOutputJson).toBe('{"files": 3}');
+  });
+
+  it("hydrates tool detail blocks from the transcript", () => {
+    const state = hydrateFromTranscript([
+      {
+        role: "tool",
+        contentJson: JSON.stringify([
+          { type: "text", text: "Write file" },
+          { type: "tool_detail", detail },
+        ]),
+        acpMessageId: null,
+        status: "completed",
+      },
+    ]);
+    expect(state.messages[0].text).toBe("Write file");
+    expect(state.messages[0].detail?.rawInputJson).toBe('{"cmd": "ls"}');
+  });
+
+  it("hydrates legacy tool rows without a detail block", () => {
+    const state = hydrateFromTranscript([
+      {
+        role: "tool",
+        contentJson: JSON.stringify([{ type: "text", text: "Run ls" }]),
+        acpMessageId: null,
+        status: "completed",
+      },
+    ]);
+    expect(state.messages[0].detail).toBeUndefined();
   });
 });

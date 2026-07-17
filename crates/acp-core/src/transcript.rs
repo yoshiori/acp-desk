@@ -8,7 +8,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::events::UiEvent;
+use crate::events::{ToolCallDetail, UiEvent};
 use crate::store::{MessageRow, Store, text_content_json};
 
 pub struct TranscriptRecorder {
@@ -33,6 +33,7 @@ enum Entry {
         tool_call_id: String,
         title: String,
         status: String,
+        detail: ToolCallDetail,
     },
 }
 
@@ -76,18 +77,25 @@ impl TranscriptRecorder {
                 tool_call_id,
                 title,
                 status,
+                detail,
                 ..
             } => {
                 self.turn.push(Entry::Tool {
                     tool_call_id: tool_call_id.clone(),
                     title: title.clone(),
                     status: status.clone(),
+                    detail: detail.clone(),
                 });
             }
             UiEvent::ToolCallUpdate {
                 tool_call_id,
                 title,
                 status,
+                content_text,
+                diffs,
+                raw_input_json,
+                raw_output_json,
+                locations,
             } => {
                 let entry = self.turn.iter_mut().rev().find(|entry| {
                     matches!(entry, Entry::Tool { tool_call_id: id, .. } if id == tool_call_id)
@@ -95,6 +103,7 @@ impl TranscriptRecorder {
                 if let Some(Entry::Tool {
                     title: entry_title,
                     status: entry_status,
+                    detail: entry_detail,
                     ..
                 }) = entry
                 {
@@ -103,6 +112,23 @@ impl TranscriptRecorder {
                     }
                     if let Some(status) = status {
                         *entry_status = status.clone();
+                    }
+                    // Same replace-if-present contract as the frontend
+                    // (chat-core applyEvent), so both transcripts agree.
+                    if let Some(text) = content_text {
+                        entry_detail.content_text = Some(text.clone());
+                    }
+                    if let Some(diffs) = diffs {
+                        entry_detail.diffs = diffs.clone();
+                    }
+                    if let Some(raw) = raw_input_json {
+                        entry_detail.raw_input_json = Some(raw.clone());
+                    }
+                    if let Some(raw) = raw_output_json {
+                        entry_detail.raw_output_json = Some(raw.clone());
+                    }
+                    if let Some(locations) = locations {
+                        entry_detail.locations = locations.clone();
                     }
                 }
             }
@@ -171,10 +197,13 @@ impl TranscriptRecorder {
                     status: None,
                 },
                 Entry::Tool {
-                    title, status, ..
+                    title,
+                    status,
+                    detail,
+                    ..
                 } => MessageRow {
                     role: "tool".to_string(),
-                    content_json: text_content_json(&title),
+                    content_json: tool_content_json(&title, &detail),
                     acp_message_id: None,
                     status: Some(status),
                 },
@@ -212,6 +241,20 @@ impl TranscriptRecorder {
     fn store(&self) -> &Store {
         &self.store
     }
+}
+
+/// Tool rows keep the title as a text block and append the detail as its
+/// own typed block, so plain-text readers (and rows written before details
+/// existed) stay compatible.
+fn tool_content_json(title: &str, detail: &ToolCallDetail) -> String {
+    if detail.is_empty() {
+        return text_content_json(title);
+    }
+    serde_json::json!([
+        { "type": "text", "text": title },
+        { "type": "tool_detail", "detail": detail },
+    ])
+    .to_string()
 }
 
 fn unix_now() -> i64 {
@@ -306,21 +349,39 @@ mod tests {
         assert_eq!(rows[1].0, "assistant");
     }
 
+    fn tool_call(id: &str, title: &str) -> UiEvent {
+        UiEvent::ToolCall {
+            tool_call_id: id.to_string(),
+            title: title.to_string(),
+            kind: "execute".to_string(),
+            status: "pending".to_string(),
+            detail: ToolCallDetail::default(),
+        }
+    }
+
+    fn tool_update(id: &str) -> UiEvent {
+        UiEvent::ToolCallUpdate {
+            tool_call_id: id.to_string(),
+            title: None,
+            status: None,
+            content_text: None,
+            diffs: None,
+            raw_input_json: None,
+            raw_output_json: None,
+            locations: None,
+        }
+    }
+
     #[test]
     fn tool_call_updates_coalesce_into_one_row_with_final_status() {
         let mut recorder = recorder();
         ready(&mut recorder);
-        recorder.observe(&UiEvent::ToolCall {
-            tool_call_id: "tc1".to_string(),
-            title: "Run ls".to_string(),
-            kind: "execute".to_string(),
-            status: "pending".to_string(),
-        });
-        recorder.observe(&UiEvent::ToolCallUpdate {
-            tool_call_id: "tc1".to_string(),
-            title: None,
-            status: Some("completed".to_string()),
-        });
+        recorder.observe(&tool_call("tc1", "Run ls"));
+        let mut update = tool_update("tc1");
+        if let UiEvent::ToolCallUpdate { status, .. } = &mut update {
+            *status = Some("completed".to_string());
+        }
+        recorder.observe(&update);
         recorder.observe(&UiEvent::TurnEnded {
             stop_reason: "end_turn".to_string(),
         });
@@ -329,6 +390,51 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].role, "tool");
         assert_eq!(rows[0].status.as_deref(), Some("completed"));
+        // No detail arrived, so the row keeps the plain text-only shape.
+        assert!(!rows[0].content_json.contains("tool_detail"));
+    }
+
+    #[test]
+    fn tool_detail_updates_merge_and_persist_as_a_detail_block() {
+        let mut recorder = recorder();
+        ready(&mut recorder);
+        let mut call = tool_call("tc1", "Write file");
+        if let UiEvent::ToolCall { detail, .. } = &mut call {
+            detail.raw_input_json = Some("{\"path\": \"a.rs\"}".to_string());
+        }
+        recorder.observe(&call);
+        let mut update = tool_update("tc1");
+        if let UiEvent::ToolCallUpdate {
+            status,
+            content_text,
+            diffs,
+            ..
+        } = &mut update
+        {
+            *status = Some("completed".to_string());
+            *content_text = Some("wrote it".to_string());
+            *diffs = Some(vec![crate::events::DiffInfo {
+                path: "a.rs".to_string(),
+                old_text: None,
+                new_text: "fn main() {}".to_string(),
+            }]);
+        }
+        recorder.observe(&update);
+        recorder.observe(&UiEvent::TurnEnded {
+            stop_reason: "end_turn".to_string(),
+        });
+
+        let rows = recorder.store().load_messages("s1").unwrap();
+        assert_eq!(rows.len(), 1);
+        let blocks: serde_json::Value = serde_json::from_str(&rows[0].content_json).unwrap();
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "Write file");
+        assert_eq!(blocks[1]["type"], "tool_detail");
+        let detail: ToolCallDetail =
+            serde_json::from_value(blocks[1]["detail"].clone()).unwrap();
+        assert_eq!(detail.content_text.as_deref(), Some("wrote it"));
+        assert_eq!(detail.diffs[0].new_text, "fn main() {}");
+        assert_eq!(detail.raw_input_json.as_deref(), Some("{\"path\": \"a.rs\"}"));
     }
 
     #[test]

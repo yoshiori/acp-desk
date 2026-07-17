@@ -2,12 +2,45 @@
 // everything that has behavior (chunk merging, tool-call status, usage) is
 // testable with plain vitest and no compiler transforms.
 
+/** Mirror of acp-core's DiffInfo / ToolCallDetail serde shapes. */
+export interface DiffInfo {
+  path: string;
+  oldText: string | null;
+  newText: string;
+}
+
+export interface ToolCallDetail {
+  contentText: string | null;
+  diffs: DiffInfo[];
+  rawInputJson: string | null;
+  rawOutputJson: string | null;
+  locations: string[];
+}
+
 /** Mirror of acp-core's UiEvent serde shape (tag "type", camelCase fields). */
 export type AcpEvent =
   | { type: "agent_message_chunk"; messageId: string | null; text: string }
   | { type: "agent_thought_chunk"; messageId: string | null; text: string }
-  | { type: "tool_call"; toolCallId: string; title: string; kind: string; status: string }
-  | { type: "tool_call_update"; toolCallId: string; title: string | null; status: string | null }
+  | {
+      type: "tool_call";
+      toolCallId: string;
+      title: string;
+      kind: string;
+      status: string;
+      detail: ToolCallDetail;
+    }
+  | {
+      type: "tool_call_update";
+      toolCallId: string;
+      title: string | null;
+      status: string | null;
+      /** Detail fields follow ACP update semantics: non-null replaces. */
+      contentText: string | null;
+      diffs: DiffInfo[] | null;
+      rawInputJson: string | null;
+      rawOutputJson: string | null;
+      locations: string[] | null;
+    }
   | { type: "available_commands"; commands: { name: string; description: string }[] }
   | {
       type: "usage";
@@ -51,6 +84,8 @@ export interface ChatMessage {
   /** Set on tool entries so later updates can find them. */
   toolCallId?: string;
   status?: string;
+  /** Collapsible tool-call detail; absent when the call carried none. */
+  detail?: ToolCallDetail;
 }
 
 export interface Usage {
@@ -103,11 +138,13 @@ export interface TranscriptRow {
 export function hydrateFromTranscript(rows: TranscriptRow[]): ChatState {
   const state = initialState();
   for (const row of rows) {
+    const blocks = parseBlocks(row.contentJson);
     pushMessage(state, {
       role: isChatRole(row.role) ? row.role : "system",
-      text: textOfContent(row.contentJson),
+      text: blocks === null ? "[unreadable message]" : textOfBlocks(blocks),
       messageId: row.acpMessageId,
       status: row.status ?? undefined,
+      detail: blocks === null ? undefined : detailOfBlocks(blocks),
     });
   }
   return state;
@@ -117,23 +154,38 @@ function isChatRole(role: string): role is ChatRole {
   return ["user", "assistant", "thought", "tool", "system"].includes(role);
 }
 
-function textOfContent(contentJson: string): string {
+function parseBlocks(contentJson: string): unknown[] | null {
   try {
     const blocks: unknown = JSON.parse(contentJson);
-    if (!Array.isArray(blocks)) return "[unreadable message]";
-    return blocks
-      .filter(
-        (block): block is { text: string } =>
-          typeof block === "object" &&
-          block !== null &&
-          "text" in block &&
-          typeof block.text === "string",
-      )
-      .map((block) => block.text)
-      .join("");
+    return Array.isArray(blocks) ? blocks : null;
   } catch {
-    return "[unreadable message]";
+    return null;
   }
+}
+
+function textOfBlocks(blocks: unknown[]): string {
+  return blocks
+    .filter(
+      (block): block is { text: string } =>
+        typeof block === "object" &&
+        block !== null &&
+        "text" in block &&
+        typeof block.text === "string",
+    )
+    .map((block) => block.text)
+    .join("");
+}
+
+function detailOfBlocks(blocks: unknown[]): ToolCallDetail | undefined {
+  const block = blocks.find(
+    (candidate): candidate is { type: string; detail: ToolCallDetail } =>
+      typeof candidate === "object" &&
+      candidate !== null &&
+      "type" in candidate &&
+      candidate.type === "tool_detail" &&
+      "detail" in candidate,
+  );
+  return block?.detail;
 }
 
 export function addUserMessage(state: ChatState, text: string): void {
@@ -168,6 +220,7 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
         messageId: null,
         toolCallId: event.toolCallId,
         status: event.status,
+        detail: event.detail,
       });
       break;
     case "tool_call_update": {
@@ -177,6 +230,28 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
       if (entry) {
         if (event.title !== null) entry.text = event.title;
         if (event.status !== null) entry.status = event.status;
+        // Loose != null: the wire contract sends null for "unchanged", but a
+        // field omitted entirely (undefined) must mean the same thing.
+        const hasDetailUpdate =
+          event.contentText != null ||
+          event.diffs != null ||
+          event.rawInputJson != null ||
+          event.rawOutputJson != null ||
+          event.locations != null;
+        if (hasDetailUpdate) {
+          entry.detail ??= {
+            contentText: null,
+            diffs: [],
+            rawInputJson: null,
+            rawOutputJson: null,
+            locations: [],
+          };
+          if (event.contentText != null) entry.detail.contentText = event.contentText;
+          if (event.diffs != null) entry.detail.diffs = event.diffs;
+          if (event.rawInputJson != null) entry.detail.rawInputJson = event.rawInputJson;
+          if (event.rawOutputJson != null) entry.detail.rawOutputJson = event.rawOutputJson;
+          if (event.locations != null) entry.detail.locations = event.locations;
+        }
       }
       break;
     }
