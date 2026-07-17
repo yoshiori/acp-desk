@@ -274,7 +274,8 @@ built-in agents by name.
 - [ ] Tool call view: render `ToolCallStart` / `ToolCallUpdate` / `ToolCallEnd`
       with a collapsible details block.
 - [ ] Usage / cost display in the header.
-- [ ] User-editable agent list (name, absolute path, args, env).
+- [x] User-editable agent list (name, absolute path, args, env) — SQLite
+      `agents` table, settings dialog, first-launch seeding from PATH.
 
 ### v1.0 — "It ships"
 
