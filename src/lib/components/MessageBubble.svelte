@@ -64,8 +64,7 @@
           <div class="detail-label">diff · {diff.path}</div>
           <pre class="diff">{#each formatDiff(diff.oldText, diff.newText) as line, index (index)}<span
               class:add={line.startsWith("+")}
-              class:del={line.startsWith("-")}>{line}
-</span>{/each}</pre>
+              class:del={line.startsWith("-")}>{line}</span>{/each}</pre>
         {/each}
         {#if message.detail.contentText}
           <div class="detail-label">output</div>
@@ -182,6 +181,11 @@
     .tool-detail pre {
       color: #f4f4f5;
     }
+  }
+  /* One block per line instead of newline text nodes: keeps future
+     backgrounds/decorations from painting trailing newlines. */
+  pre.diff span {
+    display: block;
   }
   pre.diff .add {
     color: #16a34a;

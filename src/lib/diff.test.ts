@@ -38,3 +38,9 @@ describe("formatDiff", () => {
     expect(formatDiff("same", "same")).toEqual(["(no changes)"]);
   });
 });
+
+describe("formatDiff with missing old text", () => {
+  it("treats undefined like null (new file)", () => {
+    expect(formatDiff(undefined, "only")).toEqual(["+only"]);
+  });
+});

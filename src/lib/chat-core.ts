@@ -230,12 +230,14 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
       if (entry) {
         if (event.title !== null) entry.text = event.title;
         if (event.status !== null) entry.status = event.status;
+        // Loose != null: the wire contract sends null for "unchanged", but a
+        // field omitted entirely (undefined) must mean the same thing.
         const hasDetailUpdate =
-          event.contentText !== null ||
-          event.diffs !== null ||
-          event.rawInputJson !== null ||
-          event.rawOutputJson !== null ||
-          event.locations !== null;
+          event.contentText != null ||
+          event.diffs != null ||
+          event.rawInputJson != null ||
+          event.rawOutputJson != null ||
+          event.locations != null;
         if (hasDetailUpdate) {
           entry.detail ??= {
             contentText: null,
@@ -244,11 +246,11 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
             rawOutputJson: null,
             locations: [],
           };
-          if (event.contentText !== null) entry.detail.contentText = event.contentText;
-          if (event.diffs !== null) entry.detail.diffs = event.diffs;
-          if (event.rawInputJson !== null) entry.detail.rawInputJson = event.rawInputJson;
-          if (event.rawOutputJson !== null) entry.detail.rawOutputJson = event.rawOutputJson;
-          if (event.locations !== null) entry.detail.locations = event.locations;
+          if (event.contentText != null) entry.detail.contentText = event.contentText;
+          if (event.diffs != null) entry.detail.diffs = event.diffs;
+          if (event.rawInputJson != null) entry.detail.rawInputJson = event.rawInputJson;
+          if (event.rawOutputJson != null) entry.detail.rawOutputJson = event.rawOutputJson;
+          if (event.locations != null) entry.detail.locations = event.locations;
         }
       }
       break;

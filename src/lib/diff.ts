@@ -9,10 +9,10 @@
 const CONTEXT_LINES = 2;
 
 /** Returns display lines prefixed like a unified diff: " " context,
- * "-" removed, "+" added. `oldText === null` means a brand-new file. */
-export function formatDiff(oldText: string | null, newText: string): string[] {
+ * "-" removed, "+" added. A missing `oldText` means a brand-new file. */
+export function formatDiff(oldText: string | null | undefined, newText: string): string[] {
   const newLines = newText.split("\n");
-  if (oldText === null) {
+  if (oldText == null) {
     return newLines.map((line) => `+${line}`);
   }
   const oldLines = oldText.split("\n");
