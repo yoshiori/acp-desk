@@ -392,3 +392,48 @@ describe("per-turn cost", () => {
     expect(state.usage?.lastTurnCost).toBeCloseTo(0.08);
   });
 });
+
+describe("cost epochs across resume", () => {
+  function usage(costAmount: number | null): AcpEvent {
+    return { type: "usage", usedTokens: 100, contextSize: 200_000, costAmount, costCurrency: costAmount === null ? null : "USD" };
+  }
+  const turnEnd: AcpEvent = { type: "turn_ended", stopReason: "end_turn" };
+  const stored = {
+    usedTokens: 1500,
+    contextSize: 200_000,
+    costAmount: 0.079,
+    costCurrency: "USD",
+  };
+
+  it("a fresh agent process restarting its counter does not regress the total", () => {
+    const state = initialState();
+    restoreUsage(state, stored);
+    applyAll(state, [usage(0.007), turnEnd]);
+    expect(state.usage?.costAmount).toBeCloseTo(0.086);
+    expect(state.usage?.lastTurnCost).toBeCloseTo(0.007);
+  });
+
+  it("an agent continuing its counter is not double-counted", () => {
+    const state = initialState();
+    restoreUsage(state, stored);
+    applyAll(state, [usage(0.085), turnEnd]);
+    expect(state.usage?.costAmount).toBeCloseTo(0.085);
+    expect(state.usage?.lastTurnCost).toBeCloseTo(0.006);
+  });
+
+  it("later turns in the restarted process stay in the offset space", () => {
+    const state = initialState();
+    restoreUsage(state, stored);
+    applyAll(state, [usage(0.007), turnEnd, usage(0.019), turnEnd]);
+    expect(state.usage?.costAmount).toBeCloseTo(0.098);
+    expect(state.usage?.lastTurnCost).toBeCloseTo(0.012);
+  });
+
+  it("sessions without a stored cost behave like a first run", () => {
+    const state = initialState();
+    restoreUsage(state, { ...stored, costAmount: null, costCurrency: null });
+    applyAll(state, [usage(0.01), turnEnd]);
+    expect(state.usage?.costAmount).toBeCloseTo(0.01);
+    expect(state.usage?.lastTurnCost).toBeNull();
+  });
+});

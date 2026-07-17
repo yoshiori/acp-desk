@@ -186,10 +186,12 @@ Client
 4. **`AgentMessageChunk.message_id` groups chunks.** Client is responsible for
    merging chunks with the same `message_id` into one bubble in the UI. Do not
    assume one chunk = one message.
-5. **`UsageUpdate.cost` arrives twice-ish.** Intermediate updates have
-   `cost: None`; the final one has `cost: Some(Cost { amount, currency, .. })`.
-   Render the final one as "turn cost" and keep a running sum for "session
-   cost".
+5. **`UsageUpdate.cost` arrives twice-ish and is cumulative.** Intermediate
+   updates have `cost: None`; the final one has
+   `cost: Some(Cost { amount, currency, .. })`, where `amount` is the
+   **total cumulative cost for the session** (schema doc on `Cost.amount`),
+   not a per-turn figure. Derive the turn cost as the delta against the
+   previous turn's cumulative value.
 6. **Dropping the connection kills the child's whole process group on Unix.**
    Good: prevents `npx`-wrapper leaks. Bad: means "just detach and try again
    later" is not a supported use case — treat the connection as owned.

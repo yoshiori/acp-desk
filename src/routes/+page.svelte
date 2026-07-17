@@ -26,16 +26,13 @@
   const usageLabel = $derived.by(() => {
     const usage = chat.state.usage;
     if (!usage) return "";
-    const currency = usage.costCurrency ?? "";
+    const cost = (label: string, amount: number) =>
+      `${label} ${amount.toFixed(3)} ${usage.costCurrency ?? ""}`.trimEnd();
     const parts = [
       `${usage.usedTokens.toLocaleString()} / ${usage.contextSize.toLocaleString()} tokens`,
     ];
-    if (usage.lastTurnCost !== null) {
-      parts.push(`turn ${usage.lastTurnCost.toFixed(3)} ${currency}`.trimEnd());
-    }
-    if (usage.costAmount !== null) {
-      parts.push(`total ${usage.costAmount.toFixed(3)} ${currency}`.trimEnd());
-    }
+    if (usage.lastTurnCost !== null) parts.push(cost("turn", usage.lastTurnCost));
+    if (usage.costAmount !== null) parts.push(cost("total", usage.costAmount));
     return parts.join(" · ");
   });
 </script>

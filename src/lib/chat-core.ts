@@ -88,12 +88,16 @@ export interface ChatMessage {
   detail?: ToolCallDetail;
 }
 
-export interface Usage {
+/** Mirror of acp-core's UsageRow serde shape (camelCase fields). */
+export interface StoredUsage {
   usedTokens: number;
   contextSize: number;
   /** Cumulative session cost; the agent sends it with the final usage update. */
   costAmount: number | null;
   costCurrency: string | null;
+}
+
+export interface Usage extends StoredUsage {
   /** Cost of the most recent completed turn (delta of the cumulative cost).
    * Null on the first turn and whenever no cost update arrived. */
   lastTurnCost: number | null;
@@ -110,6 +114,13 @@ export interface ChatState {
   /** Cumulative cost at the end of the previous turn; null before the
    * first completed turn with a known cost. Feeds lastTurnCost. */
   costBaseline: number | null;
+  /** Added to the agent's raw cumulative cost: a resumed session runs on a
+   * fresh agent process whose cost counter restarts at zero, so the stored
+   * total is carried forward as an offset (see resolveCumulativeCost). */
+  costOffset: number;
+  /** Stored total awaiting the resumed agent's first cost report, which
+   * decides whether the counter restarted (offset) or continued (no offset). */
+  pendingCostEpoch: number | null;
   /** Tool-call permission requests awaiting the user's decision. */
   pendingPermissions: PermissionRequest[];
   nextKey: number;
@@ -123,6 +134,8 @@ export function initialState(): ChatState {
     usage: null,
     streaming: false,
     costBaseline: null,
+    costOffset: 0,
+    pendingCostEpoch: null,
     pendingPermissions: [],
     nextKey: 0,
   };
@@ -140,7 +153,8 @@ export interface TranscriptRow {
 /**
  * Rebuilds an idle ChatState from a stored transcript (the resume flow).
  * The database rows are already chunk-merged, so this is a plain mapping;
- * usage is left null because only the agent knows the restored context size.
+ * the usage header is restored separately via restoreUsage, from the
+ * persisted usage snapshot rather than the transcript.
  */
 export function hydrateFromTranscript(rows: TranscriptRow[]): ChatState {
   const state = initialState();
@@ -262,15 +276,24 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
       }
       break;
     }
-    case "usage":
-      state.usage = {
-        usedTokens: event.usedTokens,
-        contextSize: event.contextSize,
-        costAmount: event.costAmount ?? state.usage?.costAmount ?? null,
-        costCurrency: event.costCurrency ?? state.usage?.costCurrency ?? null,
-        lastTurnCost: state.usage?.lastTurnCost ?? null,
-      };
+    case "usage": {
+      const cost = resolveCumulativeCost(state, event.costAmount);
+      if (state.usage) {
+        state.usage.usedTokens = event.usedTokens;
+        state.usage.contextSize = event.contextSize;
+        if (cost !== null) state.usage.costAmount = cost;
+        if (event.costCurrency !== null) state.usage.costCurrency = event.costCurrency;
+      } else {
+        state.usage = {
+          usedTokens: event.usedTokens,
+          contextSize: event.contextSize,
+          costAmount: cost,
+          costCurrency: event.costCurrency,
+          lastTurnCost: null,
+        };
+      }
       break;
+    }
     case "permission_requested":
       state.pendingPermissions.push({
         requestId: event.requestId,
@@ -308,27 +331,36 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
   }
 }
 
-/** Mirror of acp-core's UsageRow serde shape (camelCase fields). */
-export interface StoredUsage {
-  usedTokens: number;
-  contextSize: number;
-  costAmount: number | null;
-  costCurrency: string | null;
-}
-
 /** Seeds the header from a persisted usage snapshot (the resume flow). The
- * baseline is set so the first turn after resume gets a correct delta. */
+ * baseline is set so the first turn after resume gets a correct delta, and
+ * the stored total becomes the pending epoch for resolveCumulativeCost. */
 export function restoreUsage(state: ChatState, stored: StoredUsage): void {
   state.usage = { ...stored, lastTurnCost: null };
   state.costBaseline = stored.costAmount;
+  state.costOffset = 0;
+  state.pendingCostEpoch = stored.costAmount;
+}
+
+/** Converts the agent's raw cumulative cost into session-lifetime space.
+ * The first cost report after a resume decides the epoch: a counter that
+ * continued can never be below the stored total, so a smaller value means
+ * the fresh process restarted at zero and the stored total is carried
+ * forward as an offset. */
+function resolveCumulativeCost(state: ChatState, raw: number | null): number | null {
+  if (raw === null) return null;
+  if (state.pendingCostEpoch !== null) {
+    state.costOffset = raw < state.pendingCostEpoch ? state.pendingCostEpoch : 0;
+    state.pendingCostEpoch = null;
+  }
+  return state.costOffset + raw;
 }
 
 /** Closes a turn's cost accounting: the delta against the previous turn's
  * cumulative cost becomes lastTurnCost. An unchanged (or never-reported)
  * cumulative cost means no cost update arrived this turn — no delta. */
 function settleTurnCost(state: ChatState): void {
-  const cost = state.usage?.costAmount ?? null;
-  if (cost === null || !state.usage) return;
+  if (!state.usage || state.usage.costAmount === null) return;
+  const cost = state.usage.costAmount;
   state.usage.lastTurnCost =
     state.costBaseline !== null && cost !== state.costBaseline
       ? cost - state.costBaseline
