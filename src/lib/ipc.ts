@@ -3,7 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import type { AcpEvent, TranscriptRow } from "./chat-core";
+import type { AcpEvent, StoredUsage, TranscriptRow } from "./chat-core";
 
 export interface AgentListing {
   name: string;
@@ -42,6 +42,11 @@ export function listSessions(): Promise<SessionSummary[]> {
 
 export function loadTranscript(sessionId: string): Promise<TranscriptRow[]> {
   return invoke<TranscriptRow[]>("load_transcript", { sessionId });
+}
+
+/** Latest persisted usage snapshot of a session; null when none exists. */
+export function loadUsage(sessionId: string): Promise<StoredUsage | null> {
+  return invoke<StoredUsage | null>("load_usage", { sessionId });
 }
 
 export function sendPrompt(text: string): Promise<void> {

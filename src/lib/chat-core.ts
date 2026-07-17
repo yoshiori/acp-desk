@@ -94,6 +94,9 @@ export interface Usage {
   /** Cumulative session cost; the agent sends it with the final usage update. */
   costAmount: number | null;
   costCurrency: string | null;
+  /** Cost of the most recent completed turn (delta of the cumulative cost).
+   * Null on the first turn and whenever no cost update arrived. */
+  lastTurnCost: number | null;
 }
 
 export interface ChatState {
@@ -104,6 +107,9 @@ export interface ChatState {
   usage: Usage | null;
   /** Whether an anonymous streaming message may still receive chunks. */
   streaming: boolean;
+  /** Cumulative cost at the end of the previous turn; null before the
+   * first completed turn with a known cost. Feeds lastTurnCost. */
+  costBaseline: number | null;
   /** Tool-call permission requests awaiting the user's decision. */
   pendingPermissions: PermissionRequest[];
   nextKey: number;
@@ -116,6 +122,7 @@ export function initialState(): ChatState {
     busy: false,
     usage: null,
     streaming: false,
+    costBaseline: null,
     pendingPermissions: [],
     nextKey: 0,
   };
@@ -261,6 +268,7 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
         contextSize: event.contextSize,
         costAmount: event.costAmount ?? state.usage?.costAmount ?? null,
         costCurrency: event.costCurrency ?? state.usage?.costCurrency ?? null,
+        lastTurnCost: state.usage?.lastTurnCost ?? null,
       };
       break;
     case "permission_requested":
@@ -280,6 +288,7 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
       state.busy = false;
       state.streaming = false;
       state.pendingPermissions = [];
+      settleTurnCost(state);
       if (event.stopReason === "cancelled") {
         addSystemMessage(state, "Turn cancelled.");
       }
@@ -297,6 +306,34 @@ export function applyEvent(state: ChatState, event: AcpEvent): void {
       // own copy when the prompt was sent.
       break;
   }
+}
+
+/** Mirror of acp-core's UsageRow serde shape (camelCase fields). */
+export interface StoredUsage {
+  usedTokens: number;
+  contextSize: number;
+  costAmount: number | null;
+  costCurrency: string | null;
+}
+
+/** Seeds the header from a persisted usage snapshot (the resume flow). The
+ * baseline is set so the first turn after resume gets a correct delta. */
+export function restoreUsage(state: ChatState, stored: StoredUsage): void {
+  state.usage = { ...stored, lastTurnCost: null };
+  state.costBaseline = stored.costAmount;
+}
+
+/** Closes a turn's cost accounting: the delta against the previous turn's
+ * cumulative cost becomes lastTurnCost. An unchanged (or never-reported)
+ * cumulative cost means no cost update arrived this turn — no delta. */
+function settleTurnCost(state: ChatState): void {
+  const cost = state.usage?.costAmount ?? null;
+  if (cost === null || !state.usage) return;
+  state.usage.lastTurnCost =
+    state.costBaseline !== null && cost !== state.costBaseline
+      ? cost - state.costBaseline
+      : null;
+  state.costBaseline = cost;
 }
 
 /**
