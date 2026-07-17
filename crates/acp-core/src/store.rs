@@ -43,6 +43,16 @@ const MIGRATIONS: &[&str] = &["
       cost_currency TEXT,
       created_at    INTEGER NOT NULL
     ) STRICT;
+", "
+    CREATE TABLE agents (
+      id            INTEGER PRIMARY KEY,
+      name          TEXT NOT NULL UNIQUE,
+      command       TEXT NOT NULL,        -- absolute path (ACP constraint)
+      args_json     TEXT NOT NULL DEFAULT '[]',
+      env_json      TEXT NOT NULL DEFAULT '[]',
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL
+    ) STRICT;
 "];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -74,6 +84,37 @@ pub struct MessageRow {
     pub content_json: String,
     pub acp_message_id: Option<String>,
     pub status: Option<String>,
+}
+
+/// One user-configurable agent entry. `env` uses named pairs (not a map) so
+/// the serde shape is a stable, ordered JSON array for both SQLite and the
+/// frontend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRow {
+    pub id: i64,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<EnvPair>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvPair {
+    pub name: String,
+    pub value: String,
+}
+
+/// Input for creating (`id: None`) or updating (`id: Some`) an agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSpec {
+    pub id: Option<i64>,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<EnvPair>,
 }
 
 pub struct Store {
@@ -283,6 +324,98 @@ impl Store {
     }
 }
 
+impl Store {
+    /// All configured agents, stable order (by id).
+    pub fn list_agents(&self) -> anyhow::Result<Vec<AgentRow>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, name, command, args_json, env_json FROM agents ORDER BY id",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, name, command, args_json, env_json)| {
+                Ok(AgentRow {
+                    id,
+                    name,
+                    command,
+                    args: serde_json::from_str(&args_json)?,
+                    env: serde_json::from_str(&env_json)?,
+                })
+            })
+            .collect()
+    }
+
+    pub fn get_agent(&self, name: &str) -> anyhow::Result<Option<AgentRow>> {
+        Ok(self
+            .list_agents()?
+            .into_iter()
+            .find(|agent| agent.name == name))
+    }
+
+    /// Creates (`id: None`) or updates (`id: Some`) an agent and returns its
+    /// id. `command` must be an absolute path: the spawned child cannot rely
+    /// on PATH lookup (the app may not inherit a shell PATH).
+    pub fn save_agent(&self, spec: &AgentSpec, now: i64) -> anyhow::Result<i64> {
+        if !std::path::Path::new(&spec.command).is_absolute() {
+            anyhow::bail!("agent command must be an absolute path");
+        }
+        if spec.name.trim().is_empty() {
+            anyhow::bail!("agent name must not be empty");
+        }
+        let args_json = serde_json::to_string(&spec.args)?;
+        let env_json = serde_json::to_string(&spec.env)?;
+        match spec.id {
+            Some(id) => {
+                let changed = self.conn.execute(
+                    "UPDATE agents SET name = ?2, command = ?3, args_json = ?4,
+                       env_json = ?5, updated_at = ?6 WHERE id = ?1",
+                    params![id, spec.name, spec.command, args_json, env_json, now],
+                )?;
+                anyhow::ensure!(changed == 1, "agent {id} does not exist");
+                Ok(id)
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO agents (name, command, args_json, env_json,
+                       created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                    params![spec.name, spec.command, args_json, env_json, now],
+                )?;
+                Ok(self.conn.last_insert_rowid())
+            }
+        }
+    }
+
+    pub fn delete_agent(&self, id: i64) -> anyhow::Result<()> {
+        self.conn
+            .execute("DELETE FROM agents WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Inserts the given agents only when the table is empty (first launch,
+    /// or recovery after the user deleted everything).
+    pub fn seed_agents_if_empty(&self, specs: &[AgentSpec], now: i64) -> anyhow::Result<()> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM agents", [], |row| row.get(0))?;
+        if count > 0 {
+            return Ok(());
+        }
+        for spec in specs {
+            self.save_agent(spec, now)?;
+        }
+        Ok(())
+    }
+}
+
 /// Serializes plain text as a one-block content array.
 pub fn text_content_json(text: &str) -> String {
     serde_json::json!([{ "type": "text", "text": text }]).to_string()
@@ -457,6 +590,109 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM usage_events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(usage, 0);
+    }
+
+    fn agent_spec(name: &str, command: &str) -> AgentSpec {
+        AgentSpec {
+            id: None,
+            name: name.to_string(),
+            command: command.to_string(),
+            args: vec!["--acp".to_string()],
+            env: vec![EnvPair {
+                name: "API_KEY".to_string(),
+                value: "secret".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn saves_and_lists_agents_with_args_and_env() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.save_agent(&agent_spec("Gemini", "/usr/bin/gemini"), 100).unwrap();
+
+        let agents = store.list_agents().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id, id);
+        assert_eq!(agents[0].args, ["--acp"]);
+        assert_eq!(agents[0].env[0].name, "API_KEY");
+        assert_eq!(store.get_agent("Gemini").unwrap().unwrap().id, id);
+        assert!(store.get_agent("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn updating_an_agent_keeps_its_id_and_changes_fields() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.save_agent(&agent_spec("Gemini", "/usr/bin/gemini"), 100).unwrap();
+        let mut updated = agent_spec("Gemini CLI", "/opt/gemini");
+        updated.id = Some(id);
+        store.save_agent(&updated, 200).unwrap();
+
+        let agents = store.list_agents().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name, "Gemini CLI");
+        assert_eq!(agents[0].command, "/opt/gemini");
+    }
+
+    #[test]
+    fn rejects_relative_commands_and_empty_names() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.save_agent(&agent_spec("X", "gemini"), 100).is_err());
+        assert!(store.save_agent(&agent_spec("  ", "/usr/bin/gemini"), 100).is_err());
+    }
+
+    #[test]
+    fn duplicate_agent_names_are_rejected() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_agent(&agent_spec("A", "/bin/a"), 100).unwrap();
+        assert!(store.save_agent(&agent_spec("A", "/bin/b"), 100).is_err());
+    }
+
+    #[test]
+    fn deleting_and_updating_missing_agents() {
+        let store = Store::open_in_memory().unwrap();
+        store.delete_agent(42).unwrap();
+        let mut ghost = agent_spec("G", "/bin/g");
+        ghost.id = Some(42);
+        assert!(store.save_agent(&ghost, 100).is_err());
+    }
+
+    #[test]
+    fn seeding_only_fills_an_empty_table() {
+        let store = Store::open_in_memory().unwrap();
+        let seeds = [agent_spec("A", "/bin/a"), agent_spec("B", "/bin/b")];
+        store.seed_agents_if_empty(&seeds, 100).unwrap();
+        assert_eq!(store.list_agents().unwrap().len(), 2);
+
+        store.delete_agent(store.list_agents().unwrap()[0].id).unwrap();
+        store.seed_agents_if_empty(&seeds, 200).unwrap();
+        assert_eq!(store.list_agents().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_version_1_database_upgrades_to_gain_the_agents_table() {
+        let dir = std::env::temp_dir().join(format!("acp-migr-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v1.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!(
+                "BEGIN; {} PRAGMA user_version = 1; COMMIT;",
+                MIGRATIONS[0]
+            ))
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, agent_name, cwd, title, created_at, updated_at)
+                 VALUES ('s1', 'Claude Code', '/tmp', NULL, 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.list_agents().unwrap(), vec![]);
+        assert_eq!(store.list_sessions().unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

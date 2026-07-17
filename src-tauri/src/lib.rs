@@ -3,13 +3,49 @@ mod bridge;
 
 use std::path::PathBuf;
 
-use acp_core::{MessageRow, SessionRow, SessionSetup, Store, UsageRow};
+use acp_core::{
+    AgentConfig, AgentRow, AgentSpec, MessageRow, SessionRow, SessionSetup, Store, UsageRow,
+};
 use bridge::AcpBridge;
+use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+/// An agent row plus whether its command currently exists on disk (the UI
+/// disables unlaunchable agents but still lets the user edit them).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentListing {
+    #[serde(flatten)]
+    row: AgentRow,
+    available: bool,
+}
+
 #[tauri::command]
-fn list_agents() -> Vec<agents::AgentListing> {
-    agents::listings()
+fn list_agents(bridge: State<'_, AcpBridge>) -> Result<Vec<AgentListing>, String> {
+    let listings = open_store(&bridge)?
+        .list_agents()
+        .map_err(|error| format!("{error:#}"))?
+        .into_iter()
+        .map(|row| AgentListing {
+            available: std::path::Path::new(&row.command).is_file(),
+            row,
+        })
+        .collect();
+    Ok(listings)
+}
+
+#[tauri::command]
+fn save_agent(bridge: State<'_, AcpBridge>, spec: AgentSpec) -> Result<i64, String> {
+    open_store(&bridge)?
+        .save_agent(&spec, unix_now())
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+fn delete_agent(bridge: State<'_, AcpBridge>, id: i64) -> Result<(), String> {
+    open_store(&bridge)?
+        .delete_agent(id)
+        .map_err(|error| format!("{error:#}"))
 }
 
 /// Returns whether a fresh session was started. `false` means the agent's
@@ -27,7 +63,7 @@ fn start_session(
     if !force && bridge.current_agent().as_deref() == Some(agent_name.as_str()) {
         return Ok(false);
     }
-    let config = find_agent(&agent_name)?;
+    let config = find_agent(&bridge, &agent_name)?;
     bridge.start(app, config, default_cwd(), SessionSetup::New);
     Ok(true)
 }
@@ -44,7 +80,7 @@ fn resume_session(
         .get_session(&session_id)
         .map_err(|error| format!("{error:#}"))?
         .ok_or_else(|| format!("unknown session \"{session_id}\""))?;
-    let config = find_agent(&row.agent_name)?;
+    let config = find_agent(&bridge, &row.agent_name)?;
     bridge.start(
         app,
         config,
@@ -100,11 +136,17 @@ fn respond_permission(
     bridge.respond_permission(request_id, &option_id)
 }
 
-fn find_agent(agent_name: &str) -> Result<acp_core::AgentConfig, String> {
-    agents::builtin_agents()
-        .into_iter()
-        .find(|agent| agent.name == agent_name)
-        .ok_or_else(|| format!("agent \"{agent_name}\" is not available on this machine"))
+fn find_agent(bridge: &AcpBridge, agent_name: &str) -> Result<AgentConfig, String> {
+    let row = open_store(bridge)?
+        .get_agent(agent_name)
+        .map_err(|error| format!("{error:#}"))?
+        .ok_or_else(|| format!("agent \"{agent_name}\" is not configured"))?;
+    Ok(AgentConfig {
+        name: row.name,
+        command: PathBuf::from(row.command),
+        args: row.args,
+        env: row.env.into_iter().map(|pair| (pair.name, pair.value)).collect(),
+    })
 }
 
 fn open_store(bridge: &AcpBridge) -> Result<Store, String> {
@@ -117,6 +159,13 @@ fn default_cwd() -> PathBuf {
         .unwrap_or_else(|_| "/".into())
 }
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -126,11 +175,16 @@ pub fn run() {
             if let Some(dir) = db_path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
+            // First launch (or an emptied table) gets the PATH-detected
+            // agents; afterwards the table is the single source of truth.
+            Store::open(&db_path)?.seed_agents_if_empty(&agents::seed_specs(), unix_now())?;
             app.manage(AcpBridge::new(db_path));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             list_agents,
+            save_agent,
+            delete_agent,
             start_session,
             resume_session,
             list_sessions,

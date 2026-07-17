@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer,
-    McpServerStdio, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    CancelNotification, ContentBlock, EnvVariable, InitializeRequest, LoadSessionRequest,
+    McpServer, McpServerStdio, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
     TextContent,
 };
@@ -30,12 +30,23 @@ pub struct AgentConfig {
     pub name: String,
     pub command: PathBuf,
     pub args: Vec<String>,
+    /// Extra environment for the child (e.g. GEMINI_API_KEY); appended to
+    /// the inherited environment.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 impl AgentConfig {
     fn to_agent(&self) -> AcpAgent {
+        let env: Vec<EnvVariable> = self
+            .env
+            .iter()
+            .map(|(name, value)| EnvVariable::new(name.clone(), value.clone()))
+            .collect();
         AcpAgent::new(McpServer::Stdio(
-            McpServerStdio::new(&self.name, &self.command).args(self.args.clone()),
+            McpServerStdio::new(&self.name, &self.command)
+                .args(self.args.clone())
+                .env(env),
         ))
     }
 }

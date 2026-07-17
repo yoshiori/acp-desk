@@ -106,6 +106,26 @@ export class ChatController {
     }
   }
 
+  /** Saves an agent config; returns an error message for the form, or null. */
+  async saveAgent(spec: ipc.AgentSpec): Promise<string | null> {
+    try {
+      await ipc.saveAgent(spec);
+      this.agents = await ipc.listAgents();
+      return null;
+    } catch (error) {
+      return String(error);
+    }
+  }
+
+  async deleteAgent(id: number): Promise<void> {
+    try {
+      await ipc.deleteAgent(id);
+      this.agents = await ipc.listAgents();
+    } catch (error) {
+      addSystemMessage(this.state, `Failed to delete agent: ${error}`);
+    }
+  }
+
   /** Starts a fresh session with the selected agent even if one is alive. */
   async newChat(): Promise<void> {
     if (this.#switching || !this.selectedAgent) return;

@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
 
   import { ChatController } from "$lib/chat.svelte";
+  import AgentSettings from "$lib/components/AgentSettings.svelte";
   import Composer from "$lib/components/Composer.svelte";
   import MessageBubble from "$lib/components/MessageBubble.svelte";
   import PermissionCard from "$lib/components/PermissionCard.svelte";
@@ -10,6 +11,7 @@
   const chat = new ChatController();
 
   let log: HTMLElement | undefined = $state();
+  let settingsOpen = $state(false);
 
   onMount(() => chat.init());
   onDestroy(() => chat.dispose());
@@ -58,6 +60,14 @@
         </option>
       {/each}
     </select>
+    <button
+      type="button"
+      class="settings"
+      aria-label="Agent settings"
+      onclick={() => (settingsOpen = true)}
+    >
+      ⚙
+    </button>
     <span class="usage">{usageLabel}</span>
   </header>
 
@@ -83,6 +93,15 @@
     />
   </div>
 </div>
+
+{#if settingsOpen}
+  <AgentSettings
+    agents={chat.agents}
+    onsave={(spec) => chat.saveAgent(spec)}
+    ondelete={(id) => chat.deleteAgent(id)}
+    onclose={() => (settingsOpen = false)}
+  />
+{/if}
 
 <style>
   :global(:root) {
@@ -135,6 +154,14 @@
     color: inherit;
     border: 1px solid var(--border);
     border-radius: 6px;
+  }
+  .settings {
+    font: inherit;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 0 0.2em;
   }
   .usage {
     margin-left: auto;
