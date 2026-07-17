@@ -56,9 +56,14 @@ export function deleteAgent(id: number): Promise<void> {
 
 /** Resolves to true when a fresh session was started, false when the
  * agent's existing session is still alive and was left untouched.
- * `force` starts fresh even then (the sidebar's "New chat"). */
-export function startSession(agentName: string, force = false): Promise<boolean> {
-  return invoke<boolean>("start_session", { agentName, force });
+ * `force` starts fresh even then (the sidebar's "New chat"). `cwd` null
+ * lets the backend fall back to its own working directory. */
+export function startSession(
+  agentName: string,
+  force = false,
+  cwd: string | null = null,
+): Promise<boolean> {
+  return invoke<boolean>("start_session", { agentName, force, cwd });
 }
 
 export function resumeSession(sessionId: string): Promise<void> {

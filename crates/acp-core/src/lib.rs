@@ -11,6 +11,8 @@ pub use events::{
     CommandInfo, DiffInfo, PermissionOptionInfo, ToolCallDetail, UiEvent, map_update,
 };
 pub use permission::PermissionBroker;
-pub use session::{AgentConfig, SessionCommand, SessionSetup, run_session};
+pub use session::{
+    AgentConfig, SessionCommand, SessionSetup, resolve_session_cwd, run_session,
+};
 pub use store::{AgentRow, AgentSpec, EnvPair, MessageRow, SessionRow, Store, UsageRow};
 pub use transcript::TranscriptRecorder;

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use acp_core::{
     AgentConfig, AgentRow, AgentSpec, MessageRow, SessionRow, SessionSetup, Store, UsageRow,
+    resolve_session_cwd,
 };
 use bridge::AcpBridge;
 use serde::Serialize;
@@ -59,12 +60,15 @@ fn start_session(
     bridge: State<'_, AcpBridge>,
     agent_name: String,
     force: bool,
+    cwd: Option<String>,
 ) -> Result<bool, String> {
     if !force && bridge.current_agent().as_deref() == Some(agent_name.as_str()) {
         return Ok(false);
     }
+    let cwd = resolve_session_cwd(cwd.as_deref(), default_cwd())
+        .map_err(|error| format!("{error:#}"))?;
     let config = find_agent(&bridge, &agent_name)?;
-    bridge.start(app, config, default_cwd(), SessionSetup::New);
+    bridge.start(app, config, cwd, SessionSetup::New);
     Ok(true)
 }
 
@@ -170,6 +174,7 @@ fn unix_now() -> i64 {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("acp-desk.db");
             if let Some(dir) = db_path.parent() {
