@@ -271,11 +271,31 @@ built-in agents by name.
       agent's context; the transcript renders from SQLite).
 - [x] Permission dialog wired to `on_receive_request` — real user approve/deny
       for tool calls.
-- [ ] Tool call view: render `ToolCallStart` / `ToolCallUpdate` / `ToolCallEnd`
-      with a collapsible details block.
-- [ ] Usage / cost display in the header.
+- [x] Tool call view: collapsible details (content, colored line diffs, raw
+      input/output, file locations), persisted as `tool_detail` blocks.
+- [x] Usage / cost display in the header: per-turn delta + session total,
+      restored on resume with cost-epoch handling across agent processes.
 - [x] User-editable agent list (name, absolute path, args, env) — SQLite
       `agents` table, settings dialog, first-launch seeding from PATH.
+
+### v0.3 — "Daily driver"
+
+Make the app usable as the primary way to talk to a coding agent.
+
+- [ ] Working-directory picker for new chats. Today every session runs in the
+      app process's own cwd; a coding agent is near-useless without choosing
+      the project directory. Remember the last choice as the default.
+- [ ] Session deletion from the sidebar. The DB cascades already exist
+      (PR #5); only the command + UI are missing.
+- [ ] One-click agent restart after a crash: an errored session currently
+      just says "restart the agent" — offer a button that respawns the agent
+      and rejoins the conversation via `session/load`.
+
+Deferred beyond v0.3: Gemini CLI verification (parked deliberately — not
+touching Gemini for a while), `loadSession` capability gating, slash-command
+UI (`available_commands` is received and dropped today), plan rendering
+(`PlanUpdate` likewise), code-fence syntax highlighting, manual session
+rename, and parallel sessions (needs a multi-session bridge redesign; v0.4+).
 
 ### v1.0 — "It ships"
 
