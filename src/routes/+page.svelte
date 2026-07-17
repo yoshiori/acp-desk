@@ -43,8 +43,10 @@
   <Sidebar
     sessions={chat.sessions}
     activeId={chat.state.sessionId}
+    workingDir={chat.workingDir}
     onselect={(session) => chat.resumeSession(session)}
     onnew={() => chat.newChat()}
+    onpickdir={() => chat.pickWorkingDir()}
   />
   <div class="chat">
     <header>

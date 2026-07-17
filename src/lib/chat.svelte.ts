@@ -1,6 +1,7 @@
 // Reactive glue between the pure reducer (chat-core.ts) and the UI.
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import {
   addSystemMessage,
@@ -16,11 +17,18 @@ import {
 } from "./chat-core";
 import * as ipc from "./ipc";
 
+const WORKING_DIR_KEY = "acp-desk.workingDir";
+
 export class ChatController {
   state = $state<ChatState>(initialState());
   agents = $state<ipc.AgentListing[]>([]);
   selectedAgent = $state<string | null>(null);
   sessions = $state<ipc.SessionSummary[]>([]);
+  /** Working directory for new chats; null falls back to the backend's
+   * own cwd. Remembered across launches (it is a UI preference). */
+  workingDir = $state<string | null>(
+    typeof localStorage === "undefined" ? null : localStorage.getItem(WORKING_DIR_KEY),
+  );
 
   #unlisten: UnlistenFn | null = null;
   #disposed = false;
@@ -131,7 +139,7 @@ export class ChatController {
     if (this.#switching || !this.selectedAgent) return;
     this.#switching = true;
     try {
-      await ipc.startSession(this.selectedAgent, true);
+      await ipc.startSession(this.selectedAgent, true, this.workingDir);
       this.state = initialState();
       addSystemMessage(this.state, `Starting ${this.selectedAgent}…`);
     } catch (error) {
@@ -143,9 +151,17 @@ export class ChatController {
     }
   }
 
+  /** Opens the native folder picker and applies the choice to future chats. */
+  async pickWorkingDir(): Promise<void> {
+    const dir = await openDialog({ directory: true, defaultPath: this.workingDir ?? undefined });
+    if (typeof dir !== "string") return;
+    this.workingDir = dir;
+    localStorage.setItem(WORKING_DIR_KEY, dir);
+  }
+
   async selectAgent(name: string): Promise<void> {
     try {
-      const started = await ipc.startSession(name);
+      const started = await ipc.startSession(name, false, this.workingDir);
       this.selectedAgent = name;
       // Only a fresh session gets a fresh chat. If the agent was already
       // running, the backend may hold open permission requests; wiping the

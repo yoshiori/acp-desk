@@ -51,6 +51,28 @@ impl AgentConfig {
     }
 }
 
+/// Resolves the working directory for a new session: an explicit request
+/// must be an existing absolute directory (a typo'd cwd would otherwise
+/// surface as a confusing agent-spawn failure); no request means fallback.
+pub fn resolve_session_cwd(
+    requested: Option<&str>,
+    fallback: PathBuf,
+) -> anyhow::Result<PathBuf> {
+    let Some(requested) = requested else {
+        return Ok(fallback);
+    };
+    let path = PathBuf::from(requested);
+    anyhow::ensure!(
+        path.is_absolute(),
+        "working directory must be an absolute path"
+    );
+    anyhow::ensure!(
+        path.is_dir(),
+        "working directory does not exist: {requested}"
+    );
+    Ok(path)
+}
+
 /// Commands the UI feeds into a running session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionCommand {
@@ -226,4 +248,28 @@ fn stop_reason_str<T: Serialize>(reason: &T) -> String {
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_request_uses_the_fallback() {
+        let cwd = resolve_session_cwd(None, PathBuf::from("/fallback")).unwrap();
+        assert_eq!(cwd, PathBuf::from("/fallback"));
+    }
+
+    #[test]
+    fn an_existing_absolute_directory_is_accepted() {
+        let dir = std::env::temp_dir();
+        let cwd = resolve_session_cwd(Some(dir.to_str().unwrap()), "/fallback".into()).unwrap();
+        assert_eq!(cwd, dir);
+    }
+
+    #[test]
+    fn relative_and_missing_directories_are_rejected() {
+        assert!(resolve_session_cwd(Some("relative/path"), "/f".into()).is_err());
+        assert!(resolve_session_cwd(Some("/no/such/dir/exists/here"), "/f".into()).is_err());
+    }
 }
